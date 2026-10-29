@@ -1,0 +1,30 @@
+# окружение и секреты
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# модели и тяжёлые артефакты
+models/
+checkpoints/
+*.ckpt
+*.pt
+*.safetensors
+
+# аудио и результаты работы
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.aif
+*.aiff
+*.ogg
+*.png
+!docs/**/*.png
+generated/
+sessions/
+renders/
+out/

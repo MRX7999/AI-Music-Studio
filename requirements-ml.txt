@@ -1,0 +1,9 @@
+# Необязательные тяжёлые модели. Ставятся отдельно: pip install -r requirements-ml.txt
+# Разделение песни на стемы нейросетью (вместо встроенного HPSS):
+demucs==4.0.1
+# Вкладка «Мастеринг» (full_pipeline.py / humanize.py): апсемплинг и транскрипция
+librosa==0.10.2.post1
+audiosr==0.0.7
+openai-whisper==20240930
+tqdm==4.66.5
+matplotlib==3.9.2
