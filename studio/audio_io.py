@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ from .dsp import as_2d, resample
 
 _CACHE: dict = {}
 _CACHE_MAX = 24
+_CACHE_LOCK = threading.Lock()      # движок-сервер рендерит превью и финал в разных потоках
 
 
 def have_ffmpeg() -> bool:
@@ -40,14 +42,16 @@ def load_cached(path: str | Path, sr: int) -> np.ndarray:
     """Загрузка с ресемплингом и кэшем по (путь, mtime, sr) — превью рендерится мгновенно."""
     p = Path(path)
     key = (str(p.resolve()), p.stat().st_mtime, int(sr))
-    hit = _CACHE.get(key)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
     if hit is not None:
         return hit
     audio, file_sr = read_audio(p)
     audio = resample(audio, file_sr, sr) if file_sr != sr else audio
-    if len(_CACHE) >= _CACHE_MAX:
-        _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = audio
+    with _CACHE_LOCK:
+        while len(_CACHE) >= _CACHE_MAX:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = audio
     return audio
 
 
@@ -71,7 +75,8 @@ SUBTYPES = {16: "PCM_16", 24: "PCM_24", 32: "FLOAT"}
 
 
 def write_audio(path: str | Path, audio: np.ndarray, sr: int, bit_depth: int = 24,
-                fmt: str | None = None, metadata: dict | None = None, cover: str | Path | None = None) -> Path:
+                fmt: str | None = None, metadata: dict | None = None, cover: str | Path | None = None,
+                bitrate_kbps: int = 320) -> Path:
     """fmt: wav / flac / alac / mp3. Возвращает фактический путь (с правильным расширением)."""
     a = np.clip(as_2d(audio), -1.0, 1.0).T
     path = Path(path)
@@ -101,7 +106,8 @@ def write_audio(path: str | Path, audio: np.ndarray, sr: int, bit_depth: int = 2
         elif fmt in ("alac", "m4a"):
             cmd += ["-c:a", "alac", "-sample_fmt", "s16p" if bit_depth == 16 else "s32p"]
         elif fmt == "mp3":
-            cmd += ["-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3"]
+            kbps = int(min(max(int(bitrate_kbps or 320), 64), 320))
+            cmd += ["-c:a", "libmp3lame", "-b:a", f"{kbps}k", "-id3v2_version", "3"]
         for k, v in (metadata or {}).items():
             if v:
                 cmd += ["-metadata", f"{k}={v}"]

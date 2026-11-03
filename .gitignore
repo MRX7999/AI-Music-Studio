@@ -28,3 +28,10 @@ generated/
 sessions/
 renders/
 out/
+
+# native macOS app (SwiftPM)
+macos/.build/
+macos/.mc/
+macos/.swiftpm/
+dist/
+!macos/Resources/*.png

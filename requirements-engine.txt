@@ -1,0 +1,8 @@
+# AI Music Studio — Python engine for the native macOS app (studio/engine_server.py).
+# No GUI toolkit needed: the app draws the interface, Python does audio, generation and rendering.
+# Python 3.10–3.12. Same pins as requirements.txt (checked in CI).
+# The app can create its own venv and install this file: Settings → Engine → Set Up Automatically.
+numpy==1.26.4
+scipy==1.13.1
+soundfile==0.12.1
+requests==2.32.3

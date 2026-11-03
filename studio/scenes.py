@@ -13,6 +13,7 @@ import numpy as np
 from scipy.signal import sosfilt
 
 from .dsp import apply_eq, biquad, pink_noise
+from .mics import polar_gain
 
 C_SOUND = 343.0
 SOURCE_Z = 1.5
@@ -105,10 +106,47 @@ def critical_distance(scene: ScenePreset, rt60: float) -> float:
     return float(0.057 * np.sqrt(scene.volume / rt60))
 
 
-def pair_capsules(lx: float, ly: float, spacing: float = 0.6) -> list[tuple[float, float, float]]:
+def pair_capsules(lx: float, ly: float, spacing: float = 0.6, height: float = PAIR_Z) -> list[tuple[float, float, float]]:
     """Стереопара A-B из двух omni-капсюлей по оси x."""
     h = spacing / 2
-    return [(lx - h, ly, PAIR_Z), (lx + h, ly, PAIR_Z)]
+    return [(lx - h, ly, height), (lx + h, ly, height)]
+
+
+# Классические техники комнатной стереопары. spacing=None → берётся из настроек (pair_spacing_m).
+ROOM_TECHNIQUES = {
+    "ab":       {"name": "A-B (разнесённые omni)", "pattern": "omni", "spacing": None, "angle_deg": 0.0},
+    "xy":       {"name": "X-Y (совмещённые кардиоиды, 90°)", "pattern": "cardioid", "spacing": 0.0,
+                 "angle_deg": 45.0},
+    "ortf":     {"name": "ORTF (17 см, 110°)", "pattern": "cardioid", "spacing": 0.17, "angle_deg": 55.0},
+    "nos":      {"name": "NOS (30 см, 90°)", "pattern": "cardioid", "spacing": 0.30, "angle_deg": 45.0},
+    "blumlein": {"name": "Блюмлейн (совмещённые восьмёрки, 90°)", "pattern": "figure8", "spacing": 0.0,
+                 "angle_deg": 45.0},
+}
+
+
+def room_pair(lx: float, ly: float, technique: str = "ab", spacing: float = 0.6,
+              height: float = PAIR_Z) -> list[dict]:
+    """Капсюли комнатной пары: [{pos: (x, y, z), pattern, axis_deg}] — левый, затем правый.
+
+    axis_deg — поворот оси капсюля от направления «на сцену» (−y): минус влево, плюс вправо.
+    """
+    t = ROOM_TECHNIQUES.get(technique, ROOM_TECHNIQUES["ab"])
+    sp = spacing if t["spacing"] is None else t["spacing"]
+    caps = pair_capsules(lx, ly, sp, height)
+    return [{"pos": caps[0], "pattern": t["pattern"], "axis_deg": -t["angle_deg"]},
+            {"pos": caps[1], "pattern": t["pattern"], "axis_deg": t["angle_deg"]}]
+
+
+def _capsule_gain(pattern: str, axis_deg: float, capsule: tuple, src: tuple) -> float:
+    if pattern == "omni":
+        return 1.0
+    ax = (np.sin(np.radians(axis_deg)), -np.cos(np.radians(axis_deg)), 0.0)
+    v = np.array(src, dtype=float) - np.array(capsule, dtype=float)
+    nv = float(np.linalg.norm(v))
+    if nv < 1e-9:
+        return 1.0
+    cos_t = float(np.clip(np.dot(v, ax) / nv, -1.0, 1.0))
+    return polar_gain(pattern, float(np.degrees(np.arccos(cos_t))))
 
 
 def image_sources(scene: ScenePreset, src: tuple, max_order: int = 2):
@@ -141,18 +179,22 @@ def _dist(p: tuple, q: tuple) -> float:
 
 def spatial_fir(scene: ScenePreset, src_xy: tuple, capsule: tuple, sr: int, rt60: float,
                 ref_dist: float, early_scale_db: float = 0.0, align_samples: int = 0,
-                max_order: int = 2) -> np.ndarray:
-    """FIR прямого звука + ранних отражений для одного капсюля (нормирован на ref_dist)."""
+                max_order: int = 2, pattern: str = "omni", axis_deg: float = 0.0) -> np.ndarray:
+    """FIR прямого звука + ранних отражений для одного капсюля (нормирован на ref_dist).
+
+    pattern/axis_deg — диаграмма и поворот капсюля: каждое отражение взвешивается по углу прихода.
+    """
     src = (src_xy[0], src_xy[1], SOURCE_Z)
     taps: list[tuple[float, float]] = []
     d0 = max(_dist(src, capsule), 0.05)
-    taps.append((d0 / C_SOUND * sr, ref_dist / d0))
+    taps.append((d0 / C_SOUND * sr, ref_dist / d0 * _capsule_gain(pattern, axis_deg, capsule, src)))
     if rt60 > 0 and scene.early_db > -100:
         refl = sabine_reflection(scene, rt60)
         e_gain = 10 ** ((scene.early_db + early_scale_db) / 20.0)
         for xi, yi, zi, order in image_sources(scene, src, max_order):
             d = _dist((xi, yi, zi), capsule)
-            taps.append((d / C_SOUND * sr, (refl ** order) * ref_dist / max(d, 0.05) * e_gain))
+            g = _capsule_gain(pattern, axis_deg, capsule, (xi, yi, zi))
+            taps.append((d / C_SOUND * sr, (refl ** order) * ref_dist / max(d, 0.05) * e_gain * g))
     max_delay = max(t for t, _ in taps) - align_samples
     n = int(np.ceil(max(max_delay, 0))) + 2
     fir = np.zeros(n)

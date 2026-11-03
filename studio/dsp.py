@@ -168,6 +168,9 @@ def compressor(audio: np.ndarray, sr: int, threshold_db: float = -18.0, ratio: f
                makeup_db: float | None = None, block_ms: float = 1.0) -> np.ndarray:
     """Feed-forward компрессор с мягким коленом, связанные каналы.
 
+    Атака и релиз сглаживают само снижение усиления (схема «детектор → статическая кривая →
+    сглаживание GR»), поэтому время атаки/релиза означает то, что крутит пользователь,
+    и не зависит от того, насколько тихо было перед транзиентом.
     makeup_db=None → автоматическая компенсация половины среднего снижения усиления.
     """
     a = as_2d(audio)
@@ -179,15 +182,16 @@ def compressor(audio: np.ndarray, sr: int, threshold_db: float = -18.0, ratio: f
     pad = nb * bs - n
     sq = np.pad(np.max(np.square(a), axis=0), (0, pad)).reshape(nb, bs)
     lvl = 10.0 * np.log10(np.mean(sq, axis=1) + 1e-12)  # RMS блока, dB
-    env = _smooth_env(lvl, bs / sr, attack_ms, release_ms)
 
-    over = env - threshold_db
-    gr = np.zeros_like(env)
+    over = lvl - threshold_db
+    static = np.zeros_like(lvl)
     k = max(knee_db, 1e-6)
     hard = over > k / 2
     soft = np.abs(over) <= k / 2
-    gr[hard] = -over[hard] * (1 - 1 / ratio)
-    gr[soft] = -((over[soft] + k / 2) ** 2) / (2 * k) * (1 - 1 / ratio)
+    static[hard] = over[hard] * (1 - 1 / ratio)
+    static[soft] = ((over[soft] + k / 2) ** 2) / (2 * k) * (1 - 1 / ratio)
+    # величина снижения ≥ 0: рост — атака, спад — релиз
+    gr = -_smooth_env(static, bs / sr, attack_ms, release_ms)
 
     if makeup_db is None:
         makeup_db = -0.5 * float(np.mean(gr))
@@ -364,3 +368,44 @@ def fade(audio: np.ndarray, sr: int, fade_in_s: float = 0.0, fade_out_s: float =
     if fo > 0:
         a[:, n - fo:] *= np.cos(np.linspace(0, np.pi / 2, fo)) ** 2
     return a
+
+
+def ms_width(audio: np.ndarray, width: float) -> np.ndarray:
+    """Ширина стерео через M/S: 0 = моно, 1 = без изменений, 2 = вдвое шире."""
+    a = as_2d(audio)
+    if a.shape[0] != 2 or abs(width - 1.0) < 1e-6:
+        return a
+    mid = (a[0] + a[1]) / 2
+    side = (a[0] - a[1]) / 2 * max(width, 0.0)
+    return np.vstack([mid + side, mid - side])
+
+
+def delay_ir(sr: int, time_ms: float, feedback: float, hicut_hz: float = 6000.0,
+             pingpong: bool = True, max_s: float = 12.0, floor_db: float = -60.0) -> tuple[np.ndarray, np.ndarray]:
+    """Импульсный отклик дилея с обратной связью и ФНЧ в петле → (ir_left, ir_right).
+
+    Каждый следующий повтор проходит фильтр ещё раз и тише на feedback; повторы ниже floor_db
+    отбрасываются. pingpong: нечётные повторы слева, чётные справа (вход — моно-сумма).
+    """
+    d = max(1, int(round(sr * max(time_ms, 1.0) / 1000.0)))
+    fb = float(np.clip(feedback, 0.0, 0.95))
+    floor = 10 ** (floor_db / 20.0)
+    k_max = 1 if fb <= 1e-6 else 1 + int(np.floor(np.log(floor) / np.log(fb)))
+    k_max = max(1, min(k_max, int(max_s * sr / d)))
+    length = k_max * d + int(0.05 * sr)
+    sos = biquad("lowpass", hicut_hz, sr, q=0.707) if 20.0 < hicut_hz < 0.45 * sr else None
+    cur = np.zeros(length)
+    cur[0] = 1.0
+    ir_l = np.zeros(length)
+    ir_r = np.zeros(length)
+    for k in range(1, k_max + 1):
+        if sos is not None:
+            cur = sosfilt(sos, cur)
+        g = fb ** (k - 1)
+        seg = cur[: length - k * d] * g
+        if pingpong:
+            (ir_l if k % 2 == 1 else ir_r)[k * d:] += seg
+        else:
+            ir_l[k * d:] += seg
+            ir_r[k * d:] += seg
+    return ir_l, ir_r

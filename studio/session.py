@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field, replace
 from pathlib import Path
 
-from .scenes import SCENES, ScenePreset
+from .scenes import ROOM_TECHNIQUES, SCENES, ScenePreset
 
-SESSION_VERSION = 1
+SESSION_VERSION = 2
 
 
 @dataclass
@@ -67,6 +67,31 @@ STEM_TO_INSTRUMENT = {
 }
 
 
+
+def _coerce(cls, d: dict) -> dict:
+    """Только известные поля; числа и флаги — к типу значения по умолчанию.
+
+    JSON из нативного приложения может прислать 48000.0 вместо 48000 или 0/1 вместо false/true.
+    """
+    out = {}
+    for k, v in (d or {}).items():
+        f = cls.__dataclass_fields__.get(k)
+        if f is None:
+            continue
+        default = f.default if f.default is not MISSING else None
+        if isinstance(default, bool):
+            if isinstance(v, (int, float)):
+                v = bool(v)
+        elif isinstance(default, int):
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)
+        elif isinstance(default, float):
+            if isinstance(v, int) and not isinstance(v, bool):
+                v = float(v)
+        out[k] = v
+    return out
+
+
 @dataclass
 class Channel:
     name: str
@@ -92,6 +117,29 @@ class Channel:
     comp: float = 0.3
     drive_db: float = 0.0
     reverb_send_db: float = 0.0
+    # ── v2: полная канальная линейка (значения по умолчанию = поведение v1) ──
+    phase_invert: bool = False
+    width: float = 1.0                # ширина стерео-источника: 0 = моно, 1 = как есть, 2 = шире
+    lpf_hz: float = 20000.0           # ФНЧ; ≥ 19 кГц = выключен
+    eq_on: bool = True                # HPF/LPF работают всегда, полосы EQ — по этому флагу
+    eq_low_freq: float = 100.0        # низкая полка
+    eq_lowmid_db: float = 0.0         # низкая середина (peak)
+    eq_lowmid_freq: float = 400.0
+    eq_lowmid_q: float = 1.0
+    eq_mid_q: float = 1.0             # высокая середина (peak) — eq_mid_db / eq_mid_freq
+    eq_high_freq: float = 10000.0     # высокая полка
+    comp_mode: str = "auto"           # auto → одна ручка comp (0..1); manual → параметры ниже
+    comp_threshold_db: float = -18.0
+    comp_ratio: float = 3.0
+    comp_attack_ms: float = 10.0
+    comp_release_ms: float = 120.0
+    comp_knee_db: float = 6.0
+    comp_makeup_db: float = 0.0
+    gate_on: bool = False
+    gate_threshold_db: float = -50.0
+    gate_range_db: float = 30.0
+    gate_release_ms: float = 80.0
+    delay_send_db: float = -60.0      # посыл в дилей-шину; ≤ −60 дБ = выключен
 
 
 @dataclass
@@ -112,6 +160,38 @@ class Recording:
     output_format: str = "wav"        # wav / flac / alac / mp3
     fade_out_s: float = 0.0
     seed: int = 42
+    # ── v2: комнатная пара ──
+    room_technique: str = "ab"        # ab / xy / ortf / nos / blumlein (scenes.ROOM_TECHNIQUES)
+    room_height_m: float = 2.2
+    # ── v2: ревербератор помещения и дилей-шина ──
+    predelay_ms: float = 0.0
+    reverb_return_db: float = 0.0
+    delay_time_ms: float = 375.0
+    delay_feedback: float = 0.35
+    delay_hicut_hz: float = 6000.0
+    delay_pingpong: bool = True
+    delay_return_db: float = 0.0
+    # ── v2: мастер ──
+    master_eq_on: bool = True
+    master_hpf_hz: float = 0.0        # 0 = выкл
+    master_low_db: float = 0.0
+    master_low_freq: float = 100.0
+    master_mid_db: float = 0.0
+    master_mid_freq: float = 1000.0
+    master_mid_q: float = 0.8
+    master_high_db: float = 0.0
+    master_high_freq: float = 10000.0
+    bus_comp_mode: str = "auto"       # auto → ручка bus_comp; manual → параметры ниже
+    bus_threshold_db: float = -18.0
+    bus_ratio: float = 2.0
+    bus_attack_ms: float = 30.0
+    bus_release_ms: float = 250.0
+    bus_makeup_db: float = 0.0
+    normalize: bool = True            # LUFS-нормализация к target_lufs
+    fade_in_s: float = 0.0
+    tail_s: float = 1.5               # сколько хвоста помещения оставить после конца песни
+    dither: str = "tpdf"              # tpdf / off
+    mp3_bitrate: int = 320
 
 
 @dataclass
@@ -124,13 +204,44 @@ class Session:
     listener_y: float | None = None
     channels: list = field(default_factory=list)
     recording: Recording = field(default_factory=Recording)
-    meta: dict = field(default_factory=dict)   # title, lyrics, cover, engine, prompt…
+    meta: dict = field(default_factory=dict)   # title, artist, album, lyrics, cover, engine, prompt…
     version: int = SESSION_VERSION
+    # ── v2: настройка помещения поверх пресета (None / 1.0 / 0 = как в пресете) ──
+    room_width: float | None = None
+    room_depth: float | None = None
+    room_height: float | None = None
+    hf_damping: float = 1.0           # множитель RT60 на ВЧ (меньше = темнее хвост)
+    lf_ratio_scale: float = 1.0       # множитель RT60 на НЧ
+    early_db_offset: float = 0.0      # уровень ранних отражений относительно пресета
+    ambience_kind: str | None = None  # none / roomtone / crowd / outdoor; None = как в пресете
 
     # ── сцена ────────────────────────────────────────────────
     @property
-    def scene_preset(self) -> ScenePreset:
+    def base_scene(self) -> ScenePreset:
         return SCENES.get(self.scene, SCENES["studio_a"])
+
+    @property
+    def scene_preset(self) -> ScenePreset:
+        """Пресет помещения с пользовательскими размерами и акустикой."""
+        base = self.base_scene
+        ch: dict = {}
+        if self.room_width:
+            ch["width"] = float(min(max(self.room_width, 1.5), 300.0))
+        if self.room_depth:
+            ch["depth"] = float(min(max(self.room_depth, 1.5), 300.0))
+        if self.room_height:
+            ch["height"] = float(min(max(self.room_height, 1.8), 60.0))
+        if abs(self.hf_damping - 1.0) > 1e-6:
+            ch["hf_ratio"] = float(min(max(base.hf_ratio * self.hf_damping, 0.05), 2.0))
+        if abs(self.lf_ratio_scale - 1.0) > 1e-6:
+            ch["lf_ratio"] = float(min(max(base.lf_ratio * self.lf_ratio_scale, 0.3), 3.0))
+        if abs(self.early_db_offset) > 1e-6 and base.early_db > -100:
+            ch["early_db"] = float(base.early_db + self.early_db_offset)
+        if self.ambience_kind is not None and self.ambience_kind != base.ambience:
+            ch["ambience"] = self.ambience_kind
+            if base.ambience == "none":
+                ch["ambience_db"] = -45.0
+        return replace(base, **ch) if ch else base
 
     @property
     def rt60(self) -> float:
@@ -144,8 +255,29 @@ class Session:
 
     def set_scene(self, scene_id: str, keep_layout: bool = True) -> None:
         """Меняет помещение, пересчитывая позиции в новые размеры сцены."""
+        SCENES[scene_id]                      # KeyError для неизвестного помещения, как в v1
         old = self.scene_preset
-        new = SCENES[scene_id]
+        self.scene = scene_id
+        self.room_width = self.room_height = self.room_depth = None
+        self.ambience_kind = None
+        self._relayout(old, keep_layout)
+        self.listener_x = None
+        self.listener_y = None
+
+    def set_room_size(self, width: float | None = None, depth: float | None = None,
+                      height: float | None = None) -> None:
+        """Свои размеры помещения: позиции музыкантов масштабируются вместе со сценой."""
+        old = self.scene_preset
+        lx, ly = self.listener()
+        self.room_width, self.room_depth, self.room_height = width, depth, height
+        self._relayout(old, True)
+        new = self.scene_preset
+        if self.listener_x is not None or self.listener_y is not None:
+            self.listener_x = min(max(lx / old.width * new.width, 0.2), new.width - 0.2)
+            self.listener_y = min(max(ly / old.depth * new.depth, 0.2), new.depth - 0.2)
+
+    def _relayout(self, old: ScenePreset, keep_layout: bool = True) -> None:
+        new = self.scene_preset
         ox0, oy0, ox1, oy1 = old.stage_rect()
         nx0, ny0, nx1, ny1 = new.stage_rect()
         for ch in self.channels:
@@ -158,9 +290,6 @@ class Session:
             ch.y = ny0 + min(max(fy, -0.2), 1.2) * (ny1 - ny0)
             ch.x = min(max(ch.x, 0.3), new.width - 0.3)
             ch.y = min(max(ch.y, 0.3), new.depth - 0.3)
-        self.scene = scene_id
-        self.listener_x = None
-        self.listener_y = None
 
     # ── каналы ───────────────────────────────────────────────
     def add_channel(self, source: str | Path, name: str | None = None, instrument: str | None = None) -> Channel:
@@ -230,20 +359,26 @@ class Session:
 
     @classmethod
     def from_dict(cls, d: dict, base_dir: Path | None = None) -> "Session":
+        """Читает сессии v1 и v2: неизвестные поля пропускаются, новые получают значения по умолчанию."""
         d = dict(d)
-        rec = Recording(**{k: v for k, v in d.pop("recording", {}).items() if k in Recording.__dataclass_fields__})
+        rec = Recording(**_coerce(Recording, d.pop("recording", None) or {}))
+        if rec.room_technique not in ROOM_TECHNIQUES:
+            rec.room_technique = "ab"
         chans = []
-        for c in d.pop("channels", []):
-            c = {k: v for k, v in c.items() if k in Channel.__dataclass_fields__}
+        for c in d.pop("channels", None) or []:
+            c = _coerce(Channel, c)
             if base_dir and not Path(c["source"]).is_absolute():
                 c["source"] = str((base_dir / c["source"]).resolve())
             chans.append(Channel(**c))
-        fields_ok = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        fields_ok = _coerce(cls, d)
+        fields_ok.pop("version", None)
         s = cls(**fields_ok)
         s.channels = chans
         s.recording = rec
         if s.scene not in SCENES:
             s.scene = "studio_a"
+        if not isinstance(s.meta, dict):
+            s.meta = {}
         return s
 
     @classmethod

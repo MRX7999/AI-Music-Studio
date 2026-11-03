@@ -37,3 +37,30 @@ jobs:
           python studio_cli.py generate --engine demo --title CI --duration 12 --out /tmp/ams
           python studio_cli.py session /tmp/ams/CI/CI.wav --scene club -o /tmp/ams/session
           python studio_cli.py render /tmp/ams/session/session.studio.json --format flac
+
+  macos-app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-engine.txt
+      - name: Engine packages
+        run: python -m pip install -r requirements-engine.txt
+      - name: Toolchain
+        run: swift --version
+      - name: Build the app bundle
+        run: macos/build_app.sh --out dist
+      - name: Self-test (engine workflow, DSP, localization)
+        run: |
+          "dist/AI Music Studio.app/Contents/MacOS/AIMusicStudio" --selftest --python "$(python -c 'import sys; print(sys.executable)')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AI-Music-Studio-macOS
+          path: |
+            dist/*.zip
+            dist/*.sha256
