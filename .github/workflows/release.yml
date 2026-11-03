@@ -1,0 +1,82 @@
+name: Release
+
+# Builds the macOS app from a tag, runs the self-test and attaches the zip and its checksum to the
+# GitHub release of that tag. When the release does not exist yet, a draft is created for review.
+#   push a tag v*                      -> runs automatically
+#   gh workflow run release.yml -f tag=v1.1.0   -> rebuilds the assets of an existing tag
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, e.g. v1.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  macos-app:
+    runs-on: macos-26
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Engine packages
+        run: python -m pip install -r requirements-engine.txt
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Build the app bundle
+        run: |
+          macos/build_app.sh --out dist 2>&1 | tee build.log
+          ZIP="dist/AI-Music-Studio-${TAG#v}-macOS-arm64.zip"
+          if [ ! -f "$ZIP" ]; then
+            echo "::error::expected $ZIP: the version in macos/build_app.sh does not match the tag $TAG"
+            ls -la dist
+            exit 1
+          fi
+          perl -pe 's/\e\[[0-9;]*m//g' build.log | grep -E '\.swift:[0-9]+:[0-9]+: warning:' | sort -u > swift-warnings.txt || true
+          echo "Swift compiler warnings: $(wc -l < swift-warnings.txt | tr -d ' ')"
+          cat swift-warnings.txt
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+      - name: Self-test (engine workflow, DSP, localization)
+        run: |
+          "dist/AI Music Studio.app/Contents/MacOS/AIMusicStudio" --selftest --python "$(python -c 'import sys; print(sys.executable)')"
+      - name: Check the zip
+        run: |
+          (cd dist && shasum -a 256 -c "$(basename "$ZIP").sha256")
+          rm -rf ziptest && mkdir ziptest
+          ditto -x -k "$ZIP" ziptest
+          codesign --verify --deep --strict --verbose=2 "ziptest/AI Music Studio.app"
+          if zipinfo -1 "$ZIP" | grep -q "__MACOSX"; then echo "::error::__MACOSX entries in the zip"; exit 1; fi
+      - name: Attach to the release
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber
+          else
+            gh release create "$TAG" "$ZIP" "$ZIP.sha256" --draft --verify-tag \
+              --title "AI Music Studio ${TAG#v}" \
+              --notes "Built by the Release workflow from $TAG. See [CHANGELOG.md](https://github.com/$GH_REPO/blob/main/CHANGELOG.md)."
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
+          cat "$ZIP.sha256"
