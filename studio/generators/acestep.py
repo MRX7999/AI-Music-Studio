@@ -14,7 +14,7 @@ from urllib.parse import urljoin
 import requests
 
 from .base import (GeneratedTrack, GenerationError, GenerationRequest, Generator, check_cancel, download,
-                   safe_name, sleep_with_cancel, unique_path)
+                   meta_number, meta_text, safe_name, sleep_with_cancel, unique_path)
 
 EDIT_TASKS = ("repaint", "cover", "extract", "lego", "complete")
 BASE_ONLY_TASKS = ("extract", "lego", "complete")   # turbo/SFT models support only repaint and cover
@@ -22,6 +22,19 @@ TRACK_NAMES = ["woodwinds", "brass", "fx", "synth", "strings", "percussion", "ke
                "backing_vocals", "vocals"]
 
 LANGS = ["ru", "en", "zh", "ja", "ko", "es", "fr", "de", "it", "pt", "uk", "pl", "tr", "unknown"]
+
+
+def _seed_of(seed_value, index: int):
+    """ACE-Step reports the seeds of a batch as one string "11,22,33"; variant i gets its own seed."""
+    if seed_value is None or isinstance(seed_value, bool):
+        return None
+    if isinstance(seed_value, (int, float)):
+        return int(seed_value)
+    parts = [p.strip() for p in str(seed_value).split(",") if p.strip()]
+    if not parts:
+        return None
+    p = parts[index] if index < len(parts) else parts[0]
+    return int(p) if p.lstrip("-").isdigit() else p
 
 
 class AceStepGenerator(Generator):
@@ -192,10 +205,14 @@ class AceStepGenerator(Generator):
             if progress:
                 progress(0.92 + 0.07 * i / max(len(results), 1), f"Загрузка: {dst.name}")
             download(url, dst, headers=self._headers(), cancel=cancel)
-            metas = r.get("metas") or {}
-            meta = {"prompt": r.get("prompt") or style, "bpm": metas.get("bpm"),
-                    "key": metas.get("keyscale"), "duration": metas.get("duration"),
-                    "seed": r.get("seed_value"), "dit_model": r.get("dit_model"),
+            metas = r.get("metas") if isinstance(r.get("metas"), dict) else {}
+            # cover/repaint run without the LM: bpm, duration and key come back as "N/A"
+            bpm = meta_number(metas.get("bpm")) or meta_number(r.get("bpm"))
+            meta = {"prompt": r.get("prompt") or style, "bpm": int(round(bpm)) if bpm else None,
+                    "key": meta_text(metas.get("keyscale")) or meta_text(r.get("keyscale")),
+                    "duration": meta_number(metas.get("duration")) or meta_number(r.get("duration")),
+                    "time_signature": meta_text(metas.get("timesignature")),
+                    "seed": _seed_of(r.get("seed_value"), i), "dit_model": r.get("dit_model"),
                     "lm_model": r.get("lm_model"), "task_id": task_id,
                     "task_type": payload.get("task_type", "text2music")}
             meta.update(extra_meta or {})

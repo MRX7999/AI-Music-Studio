@@ -209,8 +209,37 @@ enum SelfTest {
         check("tool settings payload", pl["tools"]?["flashsr"]?["enabled"]?.bool == false
               && pl["tools"]?["flashsr"]?.str("path").hasPrefix("/") == true && pl["backends"]?.str("superres") == "builtin")
 
+        await v121Checks(eng, root: root, mix: mix)
+
         // recorder: host-time trimming, latency padding, count-in
         recorderChecks(root)
+    }
+
+    /// 1.2.1: ACE-Step cover sidecars with "N/A" metadata are listed; the doctor reports search dirs and fallbacks.
+    private static func v121Checks(_ eng: EngineClient, root: URL, mix: String) async {
+        let doc = try? await eng.call("tools.doctor")
+        let lyr = doc?["features"]?["lyrics"]
+        check("tools.doctor: search dirs and fallback", doc?.list("search_dirs").isEmpty == false
+              && lyr?["wanted"] != nil && lyr?["fallback"] != nil,
+              "\(doc?.list("search_dirs").count ?? 0) dirs, lyrics → \(lyr?.str("backend") ?? "nil")")
+        let dir = root.appendingPathComponent("generated/edits", isDirectory: true)
+        let audio = dir.appendingPathComponent("Selftest cover 1.wav")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: audio)
+            try FileManager.default.copyItem(atPath: mix, toPath: audio.path)
+            let side: [String: Any] = ["path": audio.lastPathComponent, "title": "Selftest cover 1", "engine": "acestep",
+                                       "meta": ["bpm": "N/A", "key": "N/A", "duration": "N/A", "seed": "11,22",
+                                                "task_type": "cover"]]
+            try JSONSerialization.data(withJSONObject: side)
+                .write(to: audio.deletingPathExtension().appendingPathExtension("json"))
+            let lib = try await eng.call("library.scan", ["root": .s(root.path)])
+            let row = lib.list("songs").first { URL(fileURLWithPath: $0.str("path")).lastPathComponent == audio.lastPathComponent }
+            check("library: ACE-Step \"N/A\" metadata", (row?.num("duration") ?? 0) > 10 && row?["meta"]?["bpm"]?.isNull == true,
+                  row.map { String(format: "%.1f s", $0.num("duration")) } ?? "not listed")
+        } catch {
+            check("library: ACE-Step \"N/A\" metadata", false, error.localizedDescription)
+        }
     }
 
     private static func recorderChecks(_ root: URL) {

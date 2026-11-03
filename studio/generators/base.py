@@ -14,6 +14,39 @@ class GenerationError(RuntimeError):
     pass
 
 
+_NA_STRINGS = {"", "n/a", "na", "none", "null", "unknown", "-", "nan"}
+_LEADING_NUMBER = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)")
+
+
+def meta_number(value) -> float | None:
+    """A positive number from generator metadata, or None.
+
+    Engines are loose here: ACE-Step sends "N/A" for bpm/duration when its language model did not
+    run (cover, repaint), Suno-style APIs send numeric strings ("183.4", "120 bpm")."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        x = float(value)
+    elif isinstance(value, str):
+        if value.strip().lower() in _NA_STRINGS:
+            return None
+        m = _LEADING_NUMBER.match(value)
+        if not m:
+            return None
+        x = float(m.group(1).replace(",", "."))
+    else:
+        return None
+    return x if x > 0 and x == x and x != float("inf") else None
+
+
+def meta_text(value) -> str | None:
+    """Metadata text with the "N/A" placeholders removed."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return None if s.lower() in _NA_STRINGS else s
+
+
 class GenerationCancelled(GenerationError):
     pass
 

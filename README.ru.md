@@ -110,7 +110,7 @@ ACE-Step 1.5 на вашем Mac, Suno через GPTunneL или офлайн-�
 
 ## Быстрый старт
 
-1. Скачайте `AI-Music-Studio-1.2.0-macOS-arm64.zip` со [страницы последнего релиза](https://github.com/MRX7999/AI-Music-Studio/releases/latest), распакуйте и перенесите **AI Music Studio.app** в «Программы».
+1. Скачайте `AI-Music-Studio-1.2.1-macOS-arm64.zip` со [страницы последнего релиза](https://github.com/MRX7999/AI-Music-Studio/releases/latest), распакуйте и перенесите **AI Music Studio.app** в «Программы».
 2. Приложение подписано ad hoc и не нотаризовано, поэтому при первом запуске нужен один из вариантов:
    - правый клик по приложению → **Открыть** → **Открыть**, или
    - `xattr -dr com.apple.quarantine "/Applications/AI Music Studio.app"`
@@ -195,6 +195,8 @@ APP="dist/AI Music Studio.app/Contents/MacOS/AIMusicStudio"
 | Перегенерация фрагмента | [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5), MLX-бэкенд | PyTorch-бэкенд ACE-Step |
 
 Это не переписывание приложения: движок вызывает каждый инструмент через адаптер с фиксированным входом и выходом, новый бэкенд — одна запись в `studio/tools.py`.
+
+Инструменты ищутся в `PATH`, `~/.local/bin` (uv, pipx), Homebrew, в Python самого движка и во всех версиях pyenv, venv (`~/.virtualenvs`, `~/.venv`) и окружениях conda/miniforge, так что `pip install openai-whisper` в Python из pyenv работает без настройки. Если выбранного в настройках инструмента нет, а другой для той же задачи установлен, приложение берёт его и пишет об этом. Модель Z-Image Turbo (5,9 ГБ) приложение скачивает само, с прогрессом, при первой обложке; недокачанные файлы прерванных загрузок перед этим удаляются.
 
 </details>
 

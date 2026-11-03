@@ -468,11 +468,32 @@ private struct CoverCard: View {
     @EnvironmentObject var store: StudioStore
     @ObservedObject var rs: ReleaseStore
 
+    private var mflux: JSONValue { rs.doctor["tools"]?["mflux"] ?? .null }
+    private var modelReady: Bool { mflux["model"]?.flag("complete") ?? false }
+
     private var backends: [(String, String)] {
-        let m = rs.doctor["tools"]?["mflux"]
-        let st = m?.flag("installed") == true ? "" : T(" — not installed", " — не установлен")
+        let st: String
+        if !mflux.flag("installed") { st = T(" — not installed", " — не установлен") }
+        else if mflux["model"] != nil && !modelReady { st = T(" — model not downloaded yet", " — модель ещё не скачана") }
+        else { st = "" }
         return [("", T("Auto", "Авто")), ("mflux", "Z-Image Turbo (MLX, mflux)" + st),
                 ("builtin", T("Procedural (from the song spectrum)", "Процедурная (из спектра песни)"))]
+    }
+
+    /// "5.6 GB left; 3.2 GB of unfinished files from earlier attempts will be removed"
+    private var modelNote: String? {
+        guard mflux.flag("installed"), let m = mflux["model"], !m.isNull, !m.flag("complete"),
+              rs.coverOpts.backend != "builtin" else { return nil }
+        let total = m.num("total_bytes", 5.91e9), have = m.num("bytes"), stale = m.num("stale_bytes")
+        let left = String(format: "%.1f", max(0, total - have) / 1e9), all = String(format: "%.1f", total / 1e9)
+        var en = "Z-Image Turbo model (\(all) GB) is downloaded once, on the first Generate: \(left) GB left, progress is shown here."
+        var ru = "Модель Z-Image Turbo (\(all) ГБ) скачивается один раз при первом «Сгенерировать»: осталось \(left) ГБ, прогресс виден здесь."
+        if stale > 50e6 {
+            let s = String(format: "%.1f", stale / 1e9)
+            en += " Unfinished files of earlier attempts (\(s) GB) are removed first."
+            ru += " Сначала удаляются недокачанные файлы прошлых попыток (\(s) ГБ)."
+        }
+        return T(en, ru)
     }
 
     var body: some View {
@@ -486,6 +507,10 @@ private struct CoverCard: View {
                 CoverThumb(path: rs.current?.str("cover") ?? "", size: 170)
                 VStack(alignment: .leading, spacing: 6) {
                     PickerRow(label: T("Model", "Модель"), selection: $rs.coverOpts.backend, options: backends, labelWidth: 90)
+                    if let note = modelNote {
+                        Text(note).font(.system(size: 10)).foregroundColor(Theme.yellow)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Caption(text: T("Prompt (empty = from title, genre and mood)", "Промпт (пусто — из названия, жанра и настроения)"))
                     TextEditor(text: $rs.coverOpts.prompt)
                         .font(.system(size: 11)).scrollContentBackground(.hidden)
@@ -509,6 +534,28 @@ private struct CoverCard: View {
 
 private struct LyricsCard: View {
     @ObservedObject var rs: ReleaseStore
+
+    /// Which Whisper the step will use, and from where — the doctor finds pip installs in pyenv/venv/conda.
+    private var whisperNote: String? {
+        guard let f = rs.doctor["features"]?["lyrics"], !f.isNull else { return nil }
+        let b = f.str("backend")
+        if b.hasPrefix("missing") || b == "off" {
+            return T("No Whisper found. Install mlx-whisper (Settings → Tools) or point the app to your openai-whisper.",
+                     "Whisper не найден. Установите mlx-whisper (Настройки → Инструменты) или укажите путь к своему openai-whisper.")
+        }
+        let t = rs.doctor["tools"]?[b] ?? .null
+        var s = t.str("label", b)
+        if let m = t["model"], !m.isNull {
+            s += ", " + m.str("name") + (m.flag("complete") ? T(" (downloaded)", " (скачана)") : T(" (downloaded on first run)", " (скачается при первом запуске)"))
+        }
+        let path = t.str("path")
+        var line = T("Engine: ", "Движок: ") + s + (path.isEmpty ? "" : " — " + path)
+        if f.flag("fallback") {
+            let w = rs.doctor["tools"]?[f.str("wanted")]?.str("label") ?? f.str("wanted")
+            line += T(" (\(w) selected in Settings is not installed)", " (выбранный в настройках \(w) не установлен)")
+        }
+        return line
+    }
 
     var body: some View {
         SectionCard(title: T("Lyrics and synced LRC", "Текст и синхронный LRC"), icon: "text.quote",
@@ -545,6 +592,10 @@ private struct LyricsCard: View {
                         .font(.system(size: 10)).foregroundColor(Theme.text2)
                 }
                 Spacer()
+            }
+            if let note = whisperNote {
+                Text(note).font(.system(size: 10)).foregroundColor(rs.doctor["features"]?["lyrics"]?.str("backend").hasPrefix("missing") == true ? Theme.yellow : Theme.text2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(T("Whisper (mlx-whisper on Apple Silicon) gives word timestamps; the app aligns your lyrics to them, so the LRC keeps your spelling. Lines Whisper missed are interpolated — check them by ear and edit times here.",
                    "Whisper (mlx-whisper на Apple Silicon) даёт тайминги слов; приложение выравнивает по ним ваш текст, поэтому в LRC остаётся ваше написание. Строки, которые Whisper не услышал, интерполируются — проверьте на слух и поправьте время здесь."))

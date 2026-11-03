@@ -335,6 +335,8 @@ final class ReleaseStore: ObservableObject {
             message = error.localizedDescription
             studio.fail(error)
         }
+        // the cover step may have downloaded the image model, lyrics may have fetched Whisper weights
+        if step == .cover || step == .lyrics { await refreshDoctor() }
     }
 
     func runAll() async {

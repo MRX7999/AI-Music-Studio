@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, 
                              QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
 from ..generators import ENGINES, GeneratedTrack, GenerationRequest
+from ..generators.base import meta_number
 from .keystore import get_secret, save_secret
 from .studio_tab import open_in_finder
 from .paths import project_root
@@ -476,8 +477,8 @@ class GenerateTab(QWidget):
 
     # ── результаты ───────────────────────────────────────────
     def _add_result(self, t: GeneratedTrack, top: bool = False):
-        dur = t.meta.get("duration")
-        label = f"{t.title}  ·  {t.engine}" + (f"  ·  {float(dur):.0f} с" if dur else "")
+        dur = meta_number(t.meta.get("duration"))
+        label = f"{t.title}  ·  {t.engine}" + (f"  ·  {dur:.0f} с" if dur else "")
         it = QListWidgetItem(label)
         it.setData(Qt.UserRole, t)
         it.setToolTip(str(t.path))
