@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from .audio_io import audio_info
-from .generators.base import GeneratedTrack
+from .generators.base import GeneratedTrack, meta_number, meta_text
 
 AUDIO_EXTS = (".wav", ".flac", ".m4a", ".mp3", ".aiff", ".aif", ".ogg")
 MAX_ITEMS = 400
@@ -33,10 +33,16 @@ def track_entry(t: GeneratedTrack, sidecar: Path | None = None) -> dict:
     d = t.to_dict(None)
     d["sidecar"] = str(sidecar or t.path.with_suffix(".json"))
     d["mtime"] = _mtime(Path(t.path))
-    dur = (t.meta or {}).get("duration")
-    if not dur:
-        dur = audio_info(t.path).get("duration")
-    d["duration"] = float(dur) if dur else None
+    # sidecars written by 1.2.0 hold "N/A" from ACE-Step covers: read the file instead of failing
+    meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+    for k in ("bpm", "duration"):
+        if k in meta:
+            meta[k] = meta_number(meta[k])
+    for k in ("key", "time_signature"):
+        if k in meta:
+            meta[k] = meta_text(meta[k])
+    dur = meta.get("duration") or meta_number(audio_info(t.path).get("duration"))
+    d["duration"] = dur
     return d
 
 

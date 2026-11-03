@@ -135,6 +135,48 @@ MESSAGES_RU = [
 FRAGMENTS_RU = [(" lines timed", " строк с таймингом"), (" kHz", " кГц"), ("uploading", "загрузка"),
                 ("analysing", "анализ")]
 
+
+def _ru_rate(rest: str) -> str:
+    """' · 5.3 MB/s · ~11 min left' → ' · 5.3 МБ/с · осталось ~11 мин'."""
+    rest = rest.replace(" MB/s", " МБ/с")
+    units = {"s": "с", "min": "мин", "h": "ч"}
+    return re.sub(r"~([\d.]+) (s|min|h) left", lambda m: f"осталось ~{m.group(1)} {units[m.group(2)]}", rest)
+
+
+_GENERATE_AGAIN = "нажмите «Сгенерировать» ещё раз"
+# 1.2.1: whole messages with numbers inside (model download, cover errors): pattern → Russian text.
+PATTERNS_RU = [
+    (r"Z-Image Turbo: downloading the model once \(~(?P<left>[\d.]+) GB\)",
+     lambda m: f"Z-Image Turbo: модель скачивается один раз (~{m['left']} ГБ)"),
+    (r"Z-Image Turbo: (?P<a>[\d.]+) of (?P<b>[\d.]+) GB(?P<rest>.*)",
+     lambda m: f"Z-Image Turbo: {m['a']} из {m['b']} ГБ{_ru_rate(m['rest'])}"),
+    (r"Z-Image Turbo: downloaded", lambda m: "Z-Image Turbo: модель скачана"),
+    (r"Whisper \((?P<x>.*) — first run downloads the model\)",
+     lambda m: f"Whisper ({m['x']} — модель скачается при первом запуске)"),
+    (r"Z-Image Turbo download stopped: no connection to huggingface\.co \((?P<a>[\d.]+) GB of (?P<b>[\d.]+) GB "
+     r"are downloaded\)\..*",
+     lambda m: f"Загрузка Z-Image Turbo остановлена: нет связи с huggingface.co (скачано {m['a']} из {m['b']} ГБ). "
+               f"Когда появится интернет, {_GENERATE_AGAIN}: недокачанные файлы удалятся, и загрузка начнётся "
+               "заново. Или выберите процедурную обложку."),
+    (r"Z-Image Turbo download stopped: not enough disk space: (?P<need>[\d.]+) GB to download, (?P<free>[\d.]+) GB "
+     r"free\..*",
+     lambda m: f"Загрузка Z-Image Turbo остановлена: не хватает места на диске — нужно {m['need']} ГБ, свободно "
+               f"{m['free']} ГБ. Освободите место и {_GENERATE_AGAIN}."),
+    (r"Z-Image Turbo download stopped: .*disk space.*",
+     lambda m: f"Загрузка Z-Image Turbo остановлена: не хватает места на диске. Освободите место и {_GENERATE_AGAIN}."),
+    (r"Z-Image Turbo download failed \((?P<a>[\d.]+) GB of (?P<b>[\d.]+) GB are downloaded\):\n(?P<tail>.*)",
+     lambda m: f"Загрузка Z-Image Turbo не удалась (скачано {m['a']} из {m['b']} ГБ):\n{m['tail']}"),
+    (r"Z-Image Turbo download finished, but files are still missing: (?P<f>.*)",
+     lambda m: f"Загрузка Z-Image Turbo завершилась, но не хватает файлов: {m['f']}"),
+    (r"Not enough memory for Z-Image Turbo\..*",
+     lambda m: "Не хватает памяти для Z-Image Turbo. Закройте тяжёлые приложения (сервер ACE-Step, браузеры) и "
+               "повторите или выберите процедурную обложку."),
+    (r"Z-Image Turbo model files are incomplete\..*",
+     lambda m: f"Файлы модели Z-Image Turbo неполные: {_GENERATE_AGAIN}, чтобы докачать."),
+    (r"mflux failed:\n(?P<tail>.*)", lambda m: f"Ошибка mflux:\n{m['tail']}"),
+]
+_PATTERNS_RU = [(re.compile(p, re.S), f) for p, f in PATTERNS_RU]
+
 _TABLES = {
     "scene": SCENES_EN, "mic": MICS_EN, "pattern": PATTERNS_EN, "instrument": INSTRUMENTS_EN,
     "preamp": PREAMPS_EN, "tape": TAPES_EN, "ambience": AMBIENCE_EN, "technique": TECHNIQUES_EN,
@@ -159,6 +201,10 @@ def message(msg: str, lang: str = "en") -> str:
     if not msg:
         return msg
     if lang == "ru":
+        for rx, fn in _PATTERNS_RU:
+            m = rx.fullmatch(msg)
+            if m:
+                return fn(m)
         for en, ru in MESSAGES_RU:
             if msg.startswith(en):
                 msg = ru + msg[len(en):]

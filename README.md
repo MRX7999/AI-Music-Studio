@@ -110,7 +110,7 @@ The same song matched to another one mastered to −11 LUFS: a linear-phase EQ t
 
 ## Quick start
 
-1. Get `AI-Music-Studio-1.2.0-macOS-arm64.zip` from the [latest release](https://github.com/MRX7999/AI-Music-Studio/releases/latest), unzip it and move **AI Music Studio.app** to Applications.
+1. Get `AI-Music-Studio-1.2.1-macOS-arm64.zip` from the [latest release](https://github.com/MRX7999/AI-Music-Studio/releases/latest), unzip it and move **AI Music Studio.app** to Applications.
 2. The app is signed ad hoc, not notarized, so the first launch needs one of these:
    - right-click the app → **Open** → **Open**, or
    - `xattr -dr com.apple.quarantine "/Applications/AI Music Studio.app"`
@@ -195,6 +195,8 @@ Every neural model runs as a separate command-line tool next to the engine, inst
 | Region regeneration | [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) MLX backend | ACE-Step PyTorch backend |
 
 This is not a rewrite of the app: the engine calls each tool as an adapter with a fixed input/output contract, so a new backend is one entry in `studio/tools.py`.
+
+Tools are found in `PATH`, `~/.local/bin` (uv, pipx), Homebrew, the engine's own Python and every pyenv version, venv (`~/.virtualenvs`, `~/.venv`) and conda/miniforge environment, so a `pip install openai-whisper` into your pyenv Python works without extra setup. If the tool selected in Settings is missing but another one for the same job is installed, the app uses that one and says so. The Z-Image Turbo model (5.9 GB) is downloaded by the app with progress on the first cover; unfinished files of interrupted downloads are removed before it starts.
 
 </details>
 

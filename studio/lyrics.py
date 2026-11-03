@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -22,6 +23,36 @@ from . import tools
 
 MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 TORCH_MODEL = "turbo"
+# openai-whisper checkpoints, best first, with their file names in ~/.cache/whisper
+_TORCH_FILES = [("turbo", "large-v3-turbo.pt"), ("large-v3", "large-v3.pt"), ("large-v2", "large-v2.pt"),
+                ("large-v1", "large-v1.pt"), ("medium", "medium.pt"), ("small", "small.pt")]
+
+
+def whisper_language(language: str) -> str:
+    """Release language field → Whisper --language. "ru" → "ru"; "en / ru" (bilingual) or junk → ""
+    (Whisper detects the language itself; a wrong forced language garbles the words)."""
+    parts = [x for x in re.split(r"[\s,/;|+&]+", (language or "").strip().lower()) if x]
+    if len(parts) != 1:
+        return ""
+    code = parts[0]
+    return code if re.fullmatch(r"[a-z]{2,3}", code) or code in ("english", "russian") else ""
+
+
+def whisper_cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return Path(base) / "whisper"
+
+
+def torch_model() -> tuple[str, bool]:
+    """openai-whisper model to use → (name, already downloaded).
+
+    turbo when it is downloaded or nothing is; otherwise the best checkpoint already on disk, so a
+    user who ran `whisper --model medium` before does not wait for another 1.6 GB download."""
+    cache = whisper_cache_dir()
+    have = [name for name, f in _TORCH_FILES if (cache / f).is_file()]
+    if TORCH_MODEL in have or not have:
+        return TORCH_MODEL, TORCH_MODEL in have
+    return have[0], True
 
 _TAG = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 _INLINE_TAG = re.compile(r"\[[^\]]*\]|\([^)]*\)")
@@ -59,13 +90,18 @@ def transcribe(path: str | Path, language: str = "", backend: str | None = None,
         raise tools.ToolMissing("mlx_whisper" if tools.is_apple_silicon() else "whisper")
     work = Path(tempfile.mkdtemp(prefix="ams_lrc_"))
     try:
+        model_torch, cached = torch_model()
         values = {"input": str(path), "outdir": str(work), "name": "lyrics", "model": MLX_MODEL,
-                  "model_torch": TORCH_MODEL}
+                  "model_torch": model_torch}
         argv = tools.build_argv(backend, values)
-        if language:
-            argv += ["--language", language]
+        lang = whisper_language(language)
+        if lang:
+            argv += ["--language", lang]
         if progress:
-            progress(0.05, f"Whisper ({tools.TOOLS[backend].label})")
+            label = tools.TOOLS[backend].label
+            if backend == "whisper":
+                label += f", {model_torch}" + ("" if cached else " — first run downloads the model")
+            progress(0.05, f"Whisper ({label})")
         tools.run(argv, progress=progress, cancel=cancel, lo=0.05, hi=0.9, label="Whisper", timeout=3 * 3600)
         js = sorted(work.glob("*.json"))
         if not js:
@@ -81,7 +117,8 @@ def transcribe(path: str | Path, language: str = "", backend: str | None = None,
             t = (w.get("word") or "").strip()
             if t:
                 words.append({"word": t, "start": float(w.get("start", 0)), "end": float(w.get("end", 0))})
-    return {"words": words, "segments": segs, "language": data.get("language", language), "backend": backend}
+    return {"words": words, "segments": segs, "language": data.get("language", language), "backend": backend,
+            "model": model_torch if backend == "whisper" else MLX_MODEL}
 
 
 def align(lines: list[dict], words: list[dict], duration: float | None = None) -> list[dict]:

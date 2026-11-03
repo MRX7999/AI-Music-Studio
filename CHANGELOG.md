@@ -1,5 +1,23 @@
 # Changelog · Изменения
 
+## 1.2.1 — 2026-11-04
+
+Fixes for three problems reported on 1.2.0.
+
+### Fixed
+- Cover, repaint and the other ACE-Step edits finished on the server, but the studio showed "could not convert string to float: 'N/A'" and the variants were missing from the library. In these modes ACE-Step 1.5 runs without its language model and reports BPM, duration and key as `"N/A"`; the engine now reads them as "unknown" and takes the duration from the audio file. Variants already made with 1.2.0 appear in the library again; their files are not changed. Each variant gets its own seed instead of the whole batch string.
+- openai-whisper (and other tools) installed with `pip` into a pyenv version, a venv or a conda environment was not found. The search now covers the engine's own Python, `~/.pyenv/versions/*/bin`, `~/.virtualenvs`, `~/.venv`, miniforge/miniconda/anaconda and python.org framework installs; pyenv shims and scripts whose interpreter was removed are skipped. When the tool selected in Settings is missing, another installed tool for the same job is used and the app shows it (Settings → AI Models, Release → Lyrics). openai-whisper uses a checkpoint already in `~/.cache/whisper` (for example `medium`) instead of downloading `turbo`. A bilingual language field ("en / ru") no longer forces a wrong Whisper language.
+- Z-Image Turbo covers failed with an incomplete model: the 5.9 GB model was left half-downloaded, because huggingface_hub cannot continue an interrupted file and starts it over, leaving dead `*.incomplete` files. The app now checks the model offline, downloads it itself before the first cover (mflux's own huggingface_hub, network retries, free-space check, progress in GB with speed and time left, cancel removes its partial files), removes unfinished files of earlier attempts, and then runs mflux offline. Errors say what happened: no connection with how much is downloaded, not enough disk space, not enough memory.
+
+### Changed
+- `tools.doctor` reports the search directories, the backend that was asked for and whether a fallback is used, and the model state for mflux and openai-whisper.
+- `tools.run` accepts extra environment variables and exact `@progress` lines from the bundled scripts.
+
+### Исправлено
+- Кавер, перегенерация фрагмента и другие правки ACE-Step: сервер всё делал, а студия показывала «could not convert string to float: 'N/A'», и варианты не появлялись в библиотеке. Теперь «N/A» читается как «неизвестно», длительность берётся из файла; варианты, сделанные в 1.2.0, снова видны.
+- Whisper, установленный через `pip` в pyenv, venv или conda, не находился. Теперь поиск охватывает эти окружения, а если выбранный инструмент не установлен, используется другой установленный для той же задачи. openai-whisper берёт уже скачанную модель (например, `medium`).
+- Обложка через Z-Image Turbo не создавалась из-за недокачанной модели. Приложение само докачивает модель с прогрессом, удаляет недокачанные файлы прошлых попыток и запускает mflux офлайн; ошибки объясняют причину.
+
 ## 1.2.0 — 2026-11-03
 
 From a generated song to a published release, with local models first. Audio Units hosting is not part of this release.

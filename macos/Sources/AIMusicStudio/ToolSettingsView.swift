@@ -139,6 +139,14 @@ struct AIModelsSettings: View {
                     .lineLimit(1)
                     .frame(width: 210, alignment: .trailing)
             }
+            if feat?.flag("fallback") == true && !resolved.hasPrefix("missing") {
+                let wanted = feat?.str("wanted") ?? ""
+                let wl = doctor["tools"]?[wanted]?.str("label") ?? wanted
+                Text(T("\(wl) is selected but not installed, so \(resolvedTitle(f, resolved)) is used instead.",
+                       "Выбран \(wl), но он не установлен, поэтому используется \(resolvedTitle(f, resolved))."))
+                    .font(.system(size: 10)).foregroundColor(Theme.yellow)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(ids, id: \.self) { id in toolRow(id) }
         }
     }
@@ -179,6 +187,9 @@ struct AIModelsSettings: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(t.str("label", id)).font(.system(size: 11, weight: .medium)).foregroundColor(Theme.text)
                     Text(statusLine(t)).font(.system(size: 9)).foregroundColor(Theme.text3).lineLimit(1).truncationMode(.middle)
+                    if let m = modelLine(t) {
+                        Text(m.0).font(.system(size: 9)).foregroundColor(m.1 ? Theme.text3 : Theme.yellow).lineLimit(1)
+                    }
                 }
                 Spacer()
                 Toggle("", isOn: Binding(get: { ov.wrappedValue.enabled }, set: { ov.wrappedValue.enabled = $0; apply() }))
@@ -213,7 +224,7 @@ struct AIModelsSettings: View {
                     }
                     HStack(spacing: 6) {
                         TextRow(label: T("Executable", "Программа"), text: ov.path,
-                                placeholder: t.str("path").isEmpty ? T("searched in PATH and ~/.local/bin", "ищется в PATH и ~/.local/bin") : t.str("path"),
+                                placeholder: t.str("path").isEmpty ? T("searched in PATH, ~/.local/bin, Homebrew, pyenv, venv and conda", "ищется в PATH, ~/.local/bin, Homebrew, pyenv, venv и conda") : t.str("path"),
                                 labelWidth: 90)
                         Button(T("Choose…", "Выбрать…")) {
                             let p = NSOpenPanel()
@@ -243,6 +254,20 @@ struct AIModelsSettings: View {
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.bg1))
+    }
+
+    /// Model files a tool downloads on top of itself: (text, ready).
+    private func modelLine(_ t: JSONValue) -> (String, Bool)? {
+        guard t.flag("installed"), let m = t["model"], !m.isNull else { return nil }
+        if m.flag("complete") {
+            return (T("model: ", "модель: ") + (m.str("name").isEmpty ? T("downloaded", "скачана") : m.str("name") + T(", downloaded", ", скачана")), true)
+        }
+        if m["total_bytes"] != nil {
+            let have = String(format: "%.1f", m.num("bytes") / 1e9), all = String(format: "%.1f", m.num("total_bytes") / 1e9)
+            return (T("model: \(have) of \(all) GB, the rest is downloaded on first use",
+                      "модель: \(have) из \(all) ГБ, остальное скачается при первом запуске"), false)
+        }
+        return (T("model: ", "модель: ") + m.str("name") + T(", downloaded on first use", ", скачается при первом запуске"), false)
     }
 
     private func statusLine(_ t: JSONValue) -> String {

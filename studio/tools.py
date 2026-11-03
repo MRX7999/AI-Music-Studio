@@ -13,6 +13,7 @@ upstream release never requires an app update.
 """
 from __future__ import annotations
 
+import glob
 import os
 import platform
 import queue
@@ -20,6 +21,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -32,6 +34,72 @@ SEARCH_DIRS = [
     "~/.cargo/bin",
     "/usr/bin",
 ]
+
+# Python environments where `pip install openai-whisper` & co. put their console scripts.
+# Searched after SEARCH_DIRS; newest pyenv/conda versions first. pyenv shims are skipped on
+# purpose: they only work for the version that is active in a shell.
+ENV_BIN_GLOBS = [
+    "~/.pyenv/versions/*/bin",
+    "~/.pyenv/versions/*/envs/*/bin",
+    "~/.virtualenvs/*/bin",
+    "~/.venvs/*/bin",
+    "~/.venv/bin",
+    "~/venv/bin",
+    "~/.ams-tools/*/bin",
+    "~/miniforge3/bin", "~/miniforge3/envs/*/bin",
+    "~/mambaforge/bin", "~/mambaforge/envs/*/bin",
+    "~/miniconda3/bin", "~/miniconda3/envs/*/bin",
+    "~/anaconda3/bin", "~/anaconda3/envs/*/bin",
+    "/opt/homebrew/Caskroom/miniforge/base/bin", "/opt/homebrew/Caskroom/miniforge/base/envs/*/bin",
+    "~/Library/Python/*/bin",
+    "/Library/Frameworks/Python.framework/Versions/*/bin",
+]
+
+
+def _version_key(path: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", path)[:4]) or (0,)
+
+
+def search_dirs() -> list[Path]:
+    """Directories searched for tool executables, in order, without duplicates.
+
+    The interpreter that runs the engine comes right after ~/.local/bin: when a user installs a tool
+    with pip into the same Python (pyenv, venv, conda), the app finds it there."""
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def add(d: str | Path):
+        p = Path(os.path.expanduser(str(d)))
+        key = str(p)
+        if key not in seen and p.is_dir():
+            seen.add(key)
+            out.append(p)
+
+    add(SEARCH_DIRS[0])
+    add(Path(sys.executable).parent)
+    for d in SEARCH_DIRS[1:]:
+        add(d)
+    for pattern in ENV_BIN_GLOBS:
+        for d in sorted(glob.glob(os.path.expanduser(pattern)), key=_version_key, reverse=True):
+            add(d)
+    return out
+
+
+def _runnable(p: Path) -> bool:
+    """Executable file whose #! interpreter (if any) still exists — a moved venv leaves dead scripts."""
+    if not (p.is_file() and os.access(p, os.X_OK)):
+        return False
+    try:
+        with open(p, "rb") as fh:
+            head = fh.read(256)
+    except OSError:
+        return False
+    if head.startswith(b"#!"):
+        line = head[2:].split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+        interp = line.split()[0] if line else ""
+        if interp.startswith("/") and Path(interp).name != "env" and not Path(interp).exists():
+            return False
+    return True
 
 
 @dataclass
@@ -164,13 +232,14 @@ def find_executable(tid: str, cfg: ToolConfig | None = None) -> str | None:
         # a dedicated venv keeps GPL code out of the MIT engine process
         p = Path(os.path.expanduser("~/.ams-tools/matchering/bin/python"))
         return str(p) if p.is_file() else None
+    dirs = search_dirs()
     for name in tool.executables:
         found = shutil.which(name)
-        if found:
+        if found and _runnable(Path(found)) and "/.pyenv/shims/" not in found:
             return found
-        for d in SEARCH_DIRS:
-            p = Path(os.path.expanduser(d)) / name
-            if p.is_file() and os.access(p, os.X_OK):
+        for d in dirs:
+            p = d / name
+            if _runnable(p):
                 return str(p)
     return None
 
@@ -242,13 +311,16 @@ _PCT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s?%")
 
 
 def run(argv: list[str], progress=None, cancel=None, timeout: float = 3600, cwd: str | None = None,
-        lo: float = 0.0, hi: float = 1.0, label: str = "") -> str:
+        lo: float = 0.0, hi: float = 1.0, label: str = "", env_extra: dict | None = None) -> str:
     """Runs a tool, streams percentages to `progress`, honours `cancel`. Returns combined output.
 
     The environment is reduced to what tools need: API keys of the studio are never inherited."""
     env = {k: v for k, v in os.environ.items()
            if not any(s in k.upper() for s in ("KEY", "TOKEN", "SECRET", "PASSWORD"))}
-    env["PATH"] = os.pathsep.join([os.path.expanduser(d) for d in SEARCH_DIRS] + [env.get("PATH", "")])
+    # the tool's own bin dir first: console scripts of a venv may call siblings (ffmpeg wrappers etc.)
+    own = [str(Path(argv[0]).parent)] if os.path.isabs(argv[0]) else []
+    env["PATH"] = os.pathsep.join(own + [os.path.expanduser(d) for d in SEARCH_DIRS] + [env.get("PATH", "")])
+    env.update(env_extra or {})
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("TQDM_MININTERVAL", "1")
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=cwd, env=env,
@@ -290,6 +362,16 @@ def run(argv: list[str], progress=None, cancel=None, timeout: float = 3600, cwd:
             line = raw.decode("utf-8", "replace").rstrip()
             if not line.strip():
                 continue
+            if line.startswith("@progress "):
+                # "@progress 41.2 Z-Image Turbo: 2.43 of 5.91 GB" from our own ml_scripts: exact text
+                bits = line.split(None, 2)
+                try:
+                    pct = min(100.0, max(0.0, float(bits[1])))
+                except (IndexError, ValueError):
+                    pct = None
+                if progress and pct is not None:
+                    progress(lo + (hi - lo) * pct / 100.0, bits[2] if len(bits) > 2 else f"{label} {pct:.0f}%")
+                continue
             lines.append(line)
             m = _PCT.findall(line)
             if progress and m:
@@ -329,10 +411,25 @@ def doctor(cfg: ToolConfig | None = None, probe: bool = False) -> dict:
             "enabled": cfg.enabled(tid), "supported": apple or not t.apple_silicon_only,
             "version": probe_version(tid, exe) if (probe and exe) else "",
         }
+    # model files these tools need on top of the executable (checked offline, no network)
+    if tools.get("mflux", {}).get("installed"):
+        try:
+            from . import cover as _cover
+            tools["mflux"]["model"] = _cover.model_status()
+        except Exception as e:  # noqa: BLE001 — a broken cache must not break the doctor
+            tools["mflux"]["model"] = {"complete": False, "missing": [f"({e})"]}
+    if tools.get("whisper", {}).get("installed"):
+        from . import lyrics as _lyrics
+        name, cached = _lyrics.torch_model()
+        tools["whisper"]["model"] = {"name": name, "complete": cached}
     features = {}
     for feat, ids in FEATURES.items():
-        features[feat] = {"backend": resolve_backend(feat, cfg), "candidates": ids}
-    return {"tools": tools, "features": features, "apple_silicon": apple}
+        want = cfg.backends.get(feat, "auto")
+        got = resolve_backend(feat, cfg)
+        features[feat] = {"backend": got, "candidates": ids, "wanted": want,
+                          "fallback": want in TOOLS and got in TOOLS and got != want}
+    return {"tools": tools, "features": features, "apple_silicon": apple,
+            "search_dirs": [str(d) for d in search_dirs()]}
 
 
 def resolve_backend(feature: str, cfg: ToolConfig | None = None) -> str:
@@ -342,7 +439,17 @@ def resolve_backend(feature: str, cfg: ToolConfig | None = None) -> str:
     if want == "off":
         return "off"
     if want not in ("auto", "builtin") and want in TOOLS:
-        return want if (cfg.enabled(want) and find_executable(want, cfg)) else "missing:" + want
+        if cfg.enabled(want) and find_executable(want, cfg):
+            return want
+        # the chosen tool is not installed, but another one for the same job is
+        # (e.g. mlx-whisper picked, openai-whisper installed): use it rather than fail
+        for tid in FEATURES.get(feature, []):
+            t = TOOLS[tid]
+            if tid == want or (t.apple_silicon_only and not is_apple_silicon()):
+                continue
+            if cfg.enabled(tid) and find_executable(tid, cfg):
+                return tid
+        return "missing:" + want
     if want == "builtin":
         return "builtin"
     for tid in FEATURES.get(feature, []):

@@ -90,7 +90,7 @@ def test_backend_resolution_and_doctor(tmp_path):
     tools.CONFIG.update({"backends": {"lyrics": "off"}})
     assert tools.resolve_backend("lyrics") == "off"
     tools.CONFIG.update({"backends": {"superres": "audiosr"},
-                         "tools": {"audiosr": {"path": str(tmp_path / "missing")}}})
+                         "tools": {"audiosr": {"path": str(tmp_path / "missing")}, "flashsr": {"enabled": False}}})
     assert tools.resolve_backend("superres") == "missing:audiosr"
     d = tools.doctor()
     assert set(d["features"]) >= {"superres", "lyrics", "stems", "cover", "detect", "voice", "refmaster"}
