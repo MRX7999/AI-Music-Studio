@@ -123,6 +123,8 @@ enum SelfTest {
         check("library lists session and mix", !store.library.list("sessions").isEmpty && !store.library.list("renders").isEmpty,
               "\(store.library.list("sessions").count) session(s), \(store.library.list("renders").count) mix(es)")
 
+        await v12Checks(store, root: root, mix: mix)
+
         // localisation round trip: engine texts and default channel names follow the language
         func cyrillic(_ t: String) -> Bool { t.unicodeScalars.contains { $0.value >= 0x0400 && $0.value <= 0x04FF } }
         let enNames = store.session?.channels.map { $0.str("name") } ?? []
@@ -144,6 +146,111 @@ enum SelfTest {
         store.engine.stop()
         try? FileManager.default.removeItem(at: root)
         return finish(t0)
+    }
+
+    /// v1.2: tools doctor, release pipeline (built-in backends), publish guard, splice, LRC, recorder helpers.
+    private static func v12Checks(_ store: StudioStore, root: URL, mix: String) async {
+        let eng = store.engine
+        check("mode: release", AppMode.allCases.contains(.release))
+        let doc = try? await eng.call("tools.doctor")
+        check("tools.doctor", doc?["features"]?["superres"] != nil && doc?["detectors"]?["fakeprint"]?.bool == true,
+              doc?["features"]?.object?.keys.sorted().joined(separator: ",") ?? "nil")
+
+        let lp = try? await eng.call("lyrics.parse", ["lrc": "[00:01.00]hello\n[00:03.50]world"])
+        check("lyrics.parse (LRC)", lp?.list("lines").count == 2 && abs((lp?["lines"]?[1]?.num("start") ?? 0) - 3.5) < 1e-6)
+
+        let spliced = root.appendingPathComponent("splice-test.wav").path
+        let sp = try? await eng.call("edit.splice", ["original": .s(mix), "edited": .s(mix), "out": .s(spliced),
+                                                     "start": 3, "end": 6, "xfade": 0.2])
+        check("edit.splice", FileManager.default.fileExists(atPath: spliced) && sp?.num("shift_samples", 99) == 0,
+              sp.map { "shift \($0.num("shift_samples"))" } ?? "nil")
+
+        do {
+            let r = try await eng.call("release.create", ["root": .s(root.path), "source": .s(mix), "title": "Selftest Release",
+                                                           "artist": "AMS", "lyrics": "[Verse]\nhello", "meta": [:]])
+            let id = r.str("id")
+            check("release.create", !id.isEmpty, id)
+            let s = try await eng.call("release.step", ["root": .s(root.path), "id": .s(id), "step": "superres",
+                                                         "options": ["backend": "builtin", "force": true, "export_sr": 48000]])
+            check("release: bandwidth (built-in extension)", s["superres"]?.str("backend") == "builtin"
+                  && FileManager.default.fileExists(atPath: s.str("master")), s["superres"]?.str("skipped") ?? "")
+            let m = try await eng.call("release.step", ["root": .s(root.path), "id": .s(id), "step": "refmaster",
+                                                         "options": ["backend": "builtin", "reference": .s(mix)]])
+            let rm = m["meta"]?["refmaster"]
+            check("release: reference master (built-in)", m.str("master").hasSuffix("master_ref.wav")
+                  && rm?.list("eq_db").isEmpty == false && (rm?.num("true_peak_db", 0) ?? 0) <= -0.9
+                  && abs((rm?.num("lufs_after") ?? 0) - (rm?.num("reference_lufs") ?? 99)) < 1.5,
+                  rm.map { String(format: "%.1f LUFS, peak %.2f dBTP", $0.num("lufs_after"), $0.num("true_peak_db")) } ?? "nil")
+            let c = try await eng.call("release.step", ["root": .s(root.path), "id": .s(id), "step": "cover",
+                                                         "options": ["backend": "builtin"]])
+            check("release: cover (built-in)", FileManager.default.fileExists(atPath: c.str("cover")), c.str("cover"))
+            let d = try await eng.call("release.step", ["root": .s(root.path), "id": .s(id), "step": "detect",
+                                                         "options": ["detectors": ["fakeprint"]]])
+            let score = d["ai_report"]?["results"]?["fakeprint"]?["score"]?.double
+            check("release: AI check (fakeprint)", score != nil, score.map { String(format: "score %.3f", $0) } ?? d.str("ai_report"))
+            let pk = try await eng.call("release.step", ["root": .s(root.path), "id": .s(id), "step": "package"])
+            let folder = pk["meta"]?["package"]?.str("folder") ?? ""
+            check("release: distributor package", !folder.isEmpty && FileManager.default.fileExists(
+                atPath: URL(fileURLWithPath: folder).appendingPathComponent("metadata.json").path), folder)
+            var refused = false
+            do {
+                _ = try await eng.call("publish.submit", ["root": .s(root.path), "id": .s(id), "services": ["package"]])
+            } catch { refused = true }
+            check("publish.submit needs confirmation", refused)
+        } catch {
+            check("release pipeline", false, error.localizedDescription)
+        }
+
+        // tool settings payload
+        var ts = ToolSettings()
+        ts.tools["flashsr"] = ToolOverride(path: "~/bin/speech", template: "", enabled: false)
+        ts.backends["superres"] = "builtin"
+        let pl = ts.payload
+        check("tool settings payload", pl["tools"]?["flashsr"]?["enabled"]?.bool == false
+              && pl["tools"]?["flashsr"]?.str("path").hasPrefix("/") == true && pl["backends"]?.str("superres") == "builtin")
+
+        // recorder: host-time trimming, latency padding, count-in
+        recorderChecks(root)
+    }
+
+    private static func recorderChecks(_ root: URL) {
+        let sr = 48000.0
+        let raw = root.appendingPathComponent("raw-take.wav")
+        let w = TakeWriter()
+        let t0 = mach_absolute_time()
+        let start = t0 + AVAudioTime.hostTime(forSeconds: 0.05)        // downbeat 50 ms into the first buffer
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 2),
+              (try? w.arm(url: raw, sampleRate: sr, channel: 1, startHost: start)) != nil else {
+            check("recorder: writer arms", false); return
+        }
+        let n = 4800
+        for b in 0..<10 {
+            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(n)) else { continue }
+            buf.frameLength = AVAudioFrameCount(n)
+            for i in 0..<n {
+                buf.floatChannelData![0][i] = 0.1
+                buf.floatChannelData![1][i] = Float(b * n + i) / 1_000_000      // channel 2 = frame index ramp
+            }
+            let host = t0 + AVAudioTime.hostTime(forSeconds: Double(b * n) / sr)
+            w.process(buf, AVAudioTime(hostTime: host))
+        }
+        let frames = w.disarm()
+        check("recorder: starts at the downbeat", abs(Int(frames) - (10 * n - 2400)) <= 1, "\(frames) frames")
+        if let f = try? AVAudioFile(forReading: raw), let b = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: 8) {
+            try? f.read(into: b, frameCount: 8)
+            let first = Double(b.floatChannelData![0][0]) * 1_000_000
+            check("recorder: picks input channel 2, mono", f.processingFormat.channelCount == 1 && abs(first - 2400) <= 1.5,
+                  String(format: "first sample = frame %.0f", first))
+        }
+        let padded = root.appendingPathComponent("take-padded.wav")
+        let d1 = (try? Recorder.finalizeTake(raw: raw, dst: padded, padSeconds: 0.5)) ?? 0
+        check("recorder: pads to the song position", abs(d1 - (Double(frames) / sr + 0.5)) < 1e-3, String(format: "%.3f s", d1))
+        let trimmed = root.appendingPathComponent("take-trimmed.wav")
+        let d2 = (try? Recorder.finalizeTake(raw: raw, dst: trimmed, padSeconds: -0.1)) ?? 0
+        check("recorder: latency trim from the head", abs(d2 - (Double(frames) / sr - 0.1)) < 1e-3, String(format: "%.3f s", d2))
+        let click = Recorder.clickBuffer(beats: 4, beat: 0.5)
+        check("recorder: count-in clicks", click.map { Int($0.frameLength) == 4 * 24000 } ?? false)
+        check("recorder: input devices enumerate", true, "\(AudioDevices.inputs().count) input device(s)")
     }
 
     private static func finish(_ t0: Date) -> Int32 {

@@ -180,6 +180,12 @@ private struct SongRow: View {
             Button(T("Open with Fresh Settings", "Открыть с чистыми настройками")) { Task { await store.openTrack(track, fresh: true) } }
             Button(T("Listen to Original", "Слушать оригинал")) { store.listen(path, title: title) }
             Divider()
+            Button(T("Regenerate Part…", "Перегенерировать часть…")) { store.regenerate(track) }
+            Button(T("Make a Release…", "Сделать релиз…")) {
+                store.mode = .release
+                Task { await store.releases.create(path: path, title: title, lyrics: track.str("lyrics")) }
+            }
+            Divider()
             Button(T("Show in Finder", "Показать в Finder")) { store.reveal(path) }
         }
         .help(path)

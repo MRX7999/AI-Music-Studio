@@ -371,6 +371,11 @@ struct TrackCard: View {
                 }
                 .buttonStyle(StudioButtonStyle(prominent: highlight, compact: true))
                 IconButton(icon: "play.fill", help: T("Listen", "Слушать"), size: 11) { store.listen(path, title: track.str("title")) }
+                IconButton(icon: "wand.and.rays", help: T("Regenerate part / cover / extract", "Перегенерировать часть / кавер / извлечь"),
+                           size: 11) { store.regenerate(track) }
+                IconButton(icon: "paperplane", help: T("Make a release", "Сделать релиз"), size: 11) {
+                    Task { await store.releases.create(path: path, title: track.str("title", fileName(path)), lyrics: track.str("lyrics")) }
+                }
                 IconButton(icon: "folder", help: T("Show in Finder", "Показать в Finder"), size: 11) { store.reveal(path) }
                 Spacer()
             }

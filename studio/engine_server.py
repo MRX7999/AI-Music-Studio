@@ -31,7 +31,15 @@ from pathlib import Path
 import numpy as np
 
 from . import __version__
+from . import cover as cover_mod
+from . import detect as detect_mod
+from . import editing, refmaster, spectrum, superres, tools, voice
+from . import lyrics as lyrics_mod
 from . import stems as stems_mod
+from .publish import pipeline as pub
+from .publish import release as rel_mod
+from .publish import telegram as tg
+from .publish import youtube as yt
 from .audio_io import have_ffmpeg, read_audio, write_audio
 from .dsp import PREAMPS, TAPES
 from .generators import ENGINES, GenerationRequest, get_engine
@@ -46,6 +54,9 @@ from .scenes import AMBIENCE_KINDS, ROOM_TECHNIQUES, SCENES, critical_distance, 
 from .session import INSTRUMENTS, Channel, Recording, Session, session_from_stems
 
 INLINE = {"ping", "cancel", "config.set", "shutdown"}
+SECRET_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET",
+               "YOUTUBE_REFRESH_TOKEN", "SIGHTENGINE_API_USER", "SIGHTENGINE_API_SECRET", "ACRCLOUD_TOKEN",
+               "ACRCLOUD_CONTAINER_ID", "ACRCLOUD_REGION")
 
 
 class Cancelled(Exception):
@@ -79,6 +90,10 @@ class Server:
             "acestep_key": os.environ.get("ACESTEP_API_KEY", ""),
             "gptunnel_key": os.environ.get("GPTUNNEL_API_KEY", ""),
         }
+        # publishing and cloud detectors: Keychain (via config.set) first, .env as a fallback
+        self.secrets = {k: os.environ.get(k, "") for k in SECRET_KEYS}
+        self._auth: dict = {}
+        self._queues: dict = {}
         self._engines: dict = {}
         self._analysis: dict = {}
         self._cache_lock = threading.Lock()
@@ -266,8 +281,14 @@ class Server:
                 self.config[k] = str(p[k]).strip()
         if p.get("lang") in ("en", "ru"):
             self.lang = p["lang"]
+        for k, v in (p.get("secrets") or {}).items():
+            if k in SECRET_KEYS and v is not None:
+                self.secrets[k] = str(v).strip()
+        if isinstance(p.get("tools"), dict):
+            tools.CONFIG.update(p["tools"])
         self._engines.clear()
-        return {"ok": True, "lang": self.lang}
+        return {"ok": True, "lang": self.lang,
+                "secrets_set": sorted(k for k, v in self.secrets.items() if v)}
 
     def m_info(self, p, **_):
         if p.get("lang") in ("en", "ru"):
@@ -551,6 +572,230 @@ class Server:
         st = stems_mod.separate(Path(p["path"]).expanduser(), Path(p["out_dir"]).expanduser(),
                                 p.get("method") or "hpss", progress=progress, cancel=cancel)
         return {"stems": {k: str(v) for k, v in st.items()}}
+
+    # ── local AI tools (MLX first) ───────────────────────────
+    def m_tools_doctor(self, p, **_):
+        d = tools.doctor(probe=bool(p.get("probe")))
+        d["detectors"] = detect_mod.available(self.secrets)
+        d["ffmpeg"] = have_ffmpeg()
+        return d
+
+    # ── spectrum and super-resolution ────────────────────────
+    def m_spectrum_image(self, p, **_):
+        src = Path(p["path"]).expanduser()
+        dst = Path(p.get("out") or (self.preview_dir / f"spec-{abs(hash((str(src), src.stat().st_mtime)))}.png"))
+        if dst.exists():
+            a, sr = read_audio(src)
+            return {"path": str(dst), "sr": sr, **spectrum.detect_cutoff(a, sr)}
+        return spectrum.spectrogram_png(src, dst, width=int(p.get("width", 1200)), height=int(p.get("height", 360)))
+
+    def m_superres_analyze(self, p, **_):
+        return superres.analyze(Path(p["path"]).expanduser(), int(p.get("export_sr") or 48000))
+
+    def m_superres_run(self, p, progress=None, cancel=None):
+        src = Path(p["path"]).expanduser()
+        dst = Path(p.get("out") or src.with_name(src.stem + " — SR.wav")).expanduser()
+        return superres.upscale(src, dst, export_sr=int(p.get("export_sr") or 48000), backend=p.get("backend") or None,
+                                mode=p.get("mode", "mid"), force=bool(p.get("force")),
+                                high_gain_db=float(p.get("high_gain_db", 0.0)), steps=int(p.get("steps", 12)),
+                                guidance=float(p.get("guidance", 2.0)), two_pass=bool(p.get("two_pass", True)),
+                                progress=progress, cancel=cancel)
+
+    # ── AI detection, lyrics, cover, reference master, voice ─
+    def m_detect_check(self, p, progress=None, cancel=None):
+        return detect_mod.check(Path(p["path"]).expanduser(), detectors=p.get("detectors") or None,
+                                keys=self.secrets, threshold=float(p.get("threshold", 0.5)),
+                                progress=progress, cancel=cancel)
+
+    def m_lyrics_build(self, p, progress=None, cancel=None):
+        path = Path(p["path"]).expanduser()
+        a, sr = read_audio(path)
+        return lyrics_mod.build(path, p.get("lyrics", ""), p.get("out_dir") or path.parent, p.get("title", ""),
+                                p.get("artist", ""), p.get("language", ""), a.shape[1] / sr,
+                                progress=progress, cancel=cancel)
+
+    def m_lyrics_parse(self, p, **_):
+        if p.get("lrc"):
+            lines = lyrics_mod.parse_lrc(p["lrc"])
+        else:
+            lines = [{"text": x["text"], "section": x["section"], "start": 0.0, "end": 0.0}
+                     for x in lyrics_mod.parse_lyrics(p.get("lyrics", ""))]
+        return {"lines": lines, "sections": lyrics_mod.sections(lines)}
+
+    def m_cover_generate(self, p, progress=None, cancel=None):
+        dst = Path(p["out"]).expanduser()
+        prompt = p.get("prompt") or cover_mod.build_prompt(p.get("title", ""), p.get("style", ""), p.get("mood", ""),
+                                                          p.get("extra", ""))
+        seed = p.get("seed")
+        return cover_mod.generate(dst, prompt, seed=int(seed) if seed not in (None, "") else None,
+                                  backend=p.get("backend") or None, audio_path=p.get("audio"),
+                                  progress=progress, cancel=cancel)
+
+    def m_refmaster_run(self, p, progress=None, cancel=None):
+        t = Path(p["target"]).expanduser()
+        out = Path(p.get("out") or t.with_name(t.stem + " — matched.wav")).expanduser()
+        return refmaster.master(t, Path(p["reference"]).expanduser(), out, int(p.get("bits", 24)),
+                                bool(p.get("use_limiter", True)), progress=progress, cancel=cancel,
+                                backend=p.get("backend") or None, strength=float(p.get("strength", 1.0)),
+                                max_db=float(p.get("max_db", 6.0)))
+
+    def m_voice_convert(self, p, progress=None, cancel=None):
+        src = Path(p["path"]).expanduser()
+        dst = Path(p.get("out") or src.with_name(src.stem + " — RVC.wav")).expanduser()
+        return voice.convert(src, dst, Path(p["model"]).expanduser(), int(p.get("pitch", 0)), p.get("f0", "rmvpe"),
+                             p.get("index") or None, progress=progress, cancel=cancel)
+
+    # ── regenerate a region / cover / extract on the timeline ─
+    def m_edit_run(self, p, progress=None, cancel=None):
+        eng = self._engine("acestep")
+        src = Path(p["path"]).expanduser()
+        root = Path(p.get("root") or src.parent).expanduser()
+        out_dir = root / "generated" / "edits"
+        task = p.get("task", "repaint")
+        kw = {k: p[k] for k in ("start", "end", "prompt", "lyrics", "track", "track_classes", "strength",
+                                "repaint_mode", "repaint_strength", "model", "seed", "steps", "variations",
+                                "language", "duration") if k in p and p[k] not in (None, "")}
+        tracks = eng.edit(src, task, out_dir, title=p.get("title", ""), progress=progress, cancel=cancel, **kw)
+        if task == "repaint" and p.get("keep_outside", True):
+            for t in tracks:
+                spliced = t.path.with_name(t.path.stem + " (splice).wav")
+                editing.splice(src, t.path, spliced, float(kw.get("start", 0.0)), float(kw.get("end", -1.0)),
+                               xfade=float(p.get("xfade", 0.35)))
+                t.path.unlink(missing_ok=True)
+                t.path.with_suffix(".json").unlink(missing_ok=True)
+                t.path = spliced
+                t.meta["spliced"] = True
+                t.save_sidecar()
+        return {"tracks": [track_entry(t) for t in tracks]}
+
+    def m_edit_splice(self, p, **_):
+        return editing.splice(Path(p["original"]).expanduser(), Path(p["edited"]).expanduser(),
+                              Path(p["out"]).expanduser(), float(p.get("start", 0.0)), float(p.get("end", -1.0)),
+                              float(p.get("xfade", 0.35)), bool(p.get("align", True)))
+
+    # ── releases and publishing ──────────────────────────────
+    def _root(self, p) -> Path:
+        if not p.get("root"):
+            raise ValueError("params.root (project folder) is required")
+        return Path(p["root"]).expanduser()
+
+    def _queue(self, root: Path) -> rel_mod.PublishQueue:
+        q = self._queues.get(str(root))
+        if q is None:
+            q = self._queues[str(root)] = rel_mod.PublishQueue(root)
+        return q
+
+    def m_release_create(self, p, **_):
+        root = self._root(p)
+        r = rel_mod.create(root, Path(p["source"]).expanduser(), p.get("title", ""), p.get("artist", ""),
+                           p.get("lyrics", ""), p.get("meta") or {})
+        return pub.summary(r)
+
+    def m_release_list(self, p, **_):
+        return {"releases": rel_mod.list_releases(self._root(p))}
+
+    def m_release_get(self, p, **_):
+        return pub.summary(rel_mod.Release.load(self._root(p), p["id"]))
+
+    def m_release_update(self, p, **_):
+        root = self._root(p)
+        r = rel_mod.Release.load(root, p["id"])
+        for k in ("title", "artist", "lyrics_text"):
+            if k in p:
+                setattr(r, k, str(p[k]))
+        if isinstance(p.get("meta"), dict):
+            for k, v in p["meta"].items():
+                r.meta[k] = v
+        r.save(root)
+        return pub.summary(r)
+
+    def m_release_step(self, p, progress=None, cancel=None):
+        root = self._root(p)
+        r = rel_mod.Release.load(root, p["id"])
+        r = pub.run_step(root, r, p["step"], p.get("options") or {}, self.secrets, progress, cancel)
+        return pub.summary(r)
+
+    def m_publish_check(self, p, **_):
+        svc = p.get("service")
+        if svc == "telegram":
+            tok = self.secrets.get("TELEGRAM_BOT_TOKEN")
+            chat = p.get("chat_id") or self.secrets.get("TELEGRAM_CHAT_ID")
+            if not tok or not chat:
+                raise ValueError("Telegram bot token and chat id are required")
+            return {"service": svc, **tg.check(tok, str(chat))}
+        if svc == "youtube":
+            s = self.secrets
+            tok = yt.access_token(s.get("YOUTUBE_CLIENT_ID"), s.get("YOUTUBE_CLIENT_SECRET"),
+                                  s.get("YOUTUBE_REFRESH_TOKEN"))
+            return {"service": svc, **yt.channel(tok)}
+        raise ValueError(f"unknown service {svc}")
+
+    def m_youtube_auth_start(self, p, **_):
+        cid, cs = self.secrets.get("YOUTUBE_CLIENT_ID"), self.secrets.get("YOUTUBE_CLIENT_SECRET")
+        if not cid or not cs:
+            raise ValueError("Enter the OAuth client id and secret of your Google Cloud project first")
+        a = yt.LoopbackAuth(cid, cs)
+        url = a.start()
+        aid = a.state[:12]
+        self._auth[aid] = a
+        return {"auth_id": aid, "url": url, "redirect": a.redirect}
+
+    def m_youtube_auth_wait(self, p, progress=None, cancel=None):
+        a = self._auth.pop(p["auth_id"], None)
+        if a is None:
+            raise ValueError("unknown auth_id")
+        tokens = a.wait(timeout=float(p.get("timeout", 600)), cancel=cancel)
+        self.secrets["YOUTUBE_REFRESH_TOKEN"] = tokens["refresh_token"]
+        ch = yt.channel(tokens["access_token"]) if tokens.get("access_token") else {}
+        # the app stores the refresh token in Keychain; it is returned once, here
+        return {"refresh_token": tokens["refresh_token"], "channel": ch}
+
+    def m_publish_submit(self, p, progress=None, cancel=None):
+        """Creates jobs and runs them now. Requires confirmed=True from the confirmation sheet."""
+        if p.get("confirmed") is not True:
+            raise PermissionError("Publishing requires confirmation in the app")
+        root = self._root(p)
+        rel_mod.Release.load(root, p["id"])          # must exist
+        q = self._queue(root)
+        wanted = {svc: dict(opts or {}) for svc, opts in (p.get("services") or {}).items()
+                  if svc in ("telegram", "youtube", "package")}
+        if not wanted:
+            raise ValueError("No services selected")
+        yt_opts = wanted.get("youtube") or {}
+        if "youtube" in wanted and yt_opts.get("privacy") == "public" and not yt_opts.get("publish_at") \
+                and p.get("confirm_public") is not True:
+            raise PermissionError("Public visibility needs a separate confirmation")
+        jobs = []
+        for svc, opts in wanted.items():
+            opts["lang"] = self.lang
+            opts["confirm_public"] = p.get("confirm_public") is True
+            jobs.append(q.add(p["id"], svc, opts))
+        results = []
+        for i, j in enumerate(jobs):
+            def prog(f, m="", i=i):
+                if progress:
+                    progress((i + f) / max(len(jobs), 1), m)
+            results.append(pub.run_job(root, q, j, self.secrets, prog, cancel))
+        return {"jobs": results}
+
+    def m_publish_queue(self, p, **_):
+        q = self._queue(self._root(p))
+        return {"jobs": q.jobs(), "log": q.log(int(p.get("limit", 100)))}
+
+    def m_publish_retry(self, p, progress=None, cancel=None):
+        root = self._root(p)
+        q = self._queue(root)
+        ids = [p["job_id"]] if p.get("job_id") else [j["id"] for j in q.due()]
+        out = []
+        for jid in ids:
+            job = next((j for j in q.jobs() if j["id"] == jid), None)
+            if job and job["status"] in ("pending", "waiting", "failed"):
+                q.update(jid, status="pending", next_try=0)
+                out.append(pub.run_job(root, q, job, self.secrets, progress, cancel))
+        return {"jobs": out}
+
+    def m_publish_remove(self, p, **_):
+        return {"ok": self._queue(self._root(p)).remove(p["job_id"])}
 
     # ── main loop ────────────────────────────────────────────
     def serve(self, inp) -> None:

@@ -1,5 +1,35 @@
 # Changelog · Изменения
 
+## 1.2.0 — 2026-11-03
+
+From a generated song to a published release, with local models first. Audio Units hosting is not part of this release.
+
+### Added
+- Regenerate part of a song (ACE-Step 1.5 repaint) from the library, a generation result or the open session: region on the waveform or by section, new prompt or lyrics, conservative/balanced/aggressive mode, up to four variants. The result is spliced back with equal-power crossfades and an alignment check, so the audio outside the region stays bit-exact, also for Suno/GPTunneL and imported songs. Cover/restyle, extract, add a track (lego) and complete with the base model. `studio/editing.py`, `edit.run`, `edit.splice`.
+- Vocal recording into the session: input device and channel, meter with peak hold and clip warning, headphone monitoring, count-in, backing playback from any position, latency compensation from Core Audio plus a manual offset; takes in `takes/`, added as a vocal channel; optional RVC conversion (mlx-rvc).
+- Release page (`⌘5`): release folders with AI disclosure; steps bandwidth restore, cover, lyrics timing, AI check, distributor package; publishing to Telegram and YouTube with a confirmation summary, a queue, retries and a log.
+- Spectrum analysis and bandwidth restore to the export rate: FlashSR (MLX, speech-swift) with two-pass window blending, AudioSR 0.0.7, or a built-in harmonic bandwidth extension (no model); the original is kept below the cutoff.
+- Cover art: Z-Image Turbo through mflux 0.24.0 (MLX) or built-in generative art; 3000×3000 JPEG and a thumbnail.
+- Lyrics timing to LRC/SRT with mlx-whisper 0.4.3 or openai-whisper 20250625, aligned to the user's lyrics.
+- AI-generation check: built-in fakeprint detector (MIT weights bundled, NumPy port matching the PyTorch reference), aigm-detector (MLX), Sightengine and ACRCloud with your keys; per-detector scores and a disclosure recommendation.
+- Reference mastering as a release step: Matchering 2.0.6 as a separate GPLv3 process, or a built-in matcher (linear-phase EQ toward the reference spectrum with strength and range, BS.1770 loudness match, −1 dBTP limiter).
+- Stems through demucs-mlx 1.6.1 or Demucs 4.0.1 as external tools.
+- Settings → AI Models (tool status, license, install command, backend per feature, custom path and arguments) and Settings → Publishing (Telegram, YouTube sign-in, Sightengine, ACRCloud; secrets in the Keychain).
+- `studio/tools.py` registry and `tools.doctor`; `requirements-mlx.md` with pinned install commands.
+- New environment variables in `.env.example` for Telegram, YouTube, Sightengine and ACRCloud.
+
+### Changed
+- Engine messages are translated to Russian when the interface is Russian.
+- The app bundle copies the bundled model weights and their NOTICE files; `Info.plist` declares microphone use.
+- README rebuilt around screenshots and charts generated from real engine output (`scripts/readme_charts.py`); reference tables moved into collapsible sections.
+- The Render button no longer wraps in narrow windows; the release page fits the window and the step strip scrolls.
+
+### Добавлено
+- Перегенерация части песни (ACE-Step repaint) со склейкой: вне фрагмента звук остаётся бит-в-бит; кавер, извлечение, добавление дорожки, дописывание аранжировки.
+- Запись вокала в сессию с мониторингом, отсчётом, фонограммой, компенсацией задержки и обработкой RVC.
+- Страница «Релиз»: восстановление спектра, обложка, LRC, проверка на ИИ, пакет для дистрибьютора, публикация в Telegram и на YouTube с подтверждением и очередью.
+- Настройки «AI-модели» и «Публикация»; локальные модели через MLX с запасными вариантами.
+
 ## 1.1.0 — 2026-10-29
 
 Native macOS studio. The Python engine stays the same project, the interface is now SwiftUI.

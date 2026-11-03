@@ -101,6 +101,12 @@ struct StudioCommands: Commands {
             }
             .keyboardShortcut(.return)
             .disabled(!store.engineState.isReady || store.generating)
+            Button(T("Record Vocals…", "Записать вокал…")) { store.showRecorder = true }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(store.session == nil)
+            Button(T("Regenerate Part…", "Перегенерировать часть…")) { store.regenerateSessionSong() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(store.sourceMixPath == nil)
             Divider()
             Button(store.showSidebar ? T("Hide Library", "Скрыть библиотеку") : T("Show Library", "Показать библиотеку")) {
                 withAnimation(.easeOut(duration: 0.15)) { store.showSidebar.toggle() }

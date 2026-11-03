@@ -8,7 +8,7 @@ __pycache__/
 .DS_Store
 
 # модели и тяжёлые артефакты
-models/
+/models/
 checkpoints/
 *.ckpt
 *.pt

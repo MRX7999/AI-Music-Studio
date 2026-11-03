@@ -94,6 +94,23 @@ enum Screenshots {
         store.mode = .master
         await shot(store, "app-master.png", out)
 
+        // v1.2: release page, regenerate sheet, AI models settings
+        let rs = store.releases
+        rs.coverOpts.backend = "builtin"
+        rs.sr.backend = "builtin"
+        rs.detectOpts.aigm = false
+        await rs.create(path: track.str("path"), title: "Night Drive", lyrics: lyrics)
+        rs.refOpts.reference = track.str("path")
+        for step in [ReleaseStep.superres, .refmaster, .cover, .detect, .package] { await rs.run(step) }
+        await rs.refreshDoctor()
+        store.mode = .release
+        await shot(store, "app-release.png", out)
+        await shotView(RegenerateSheet(target: RegenTarget(path: track.str("path"), title: "Night Drive", lyrics: lyrics))
+                           .environmentObject(store), "app-regenerate.png", NSSize(width: 820, height: 560), out)
+        await shotView(ReleaseShowcase(rs: rs).environmentObject(store), "app-release-steps.png", NSSize(width: 900, height: 640), out)
+        await shotView(AIModelsSettings().environmentObject(store), "app-ai-models.png", NSSize(width: 760, height: 600), out)
+        await shotView(PublishingSettings().environmentObject(store), "app-publishing.png", NSSize(width: 760, height: 600), out)
+
         L10n.isRussian = true
         store.langCode = "ru"
         await store.reloadLocalized()
@@ -107,6 +124,31 @@ enum Screenshots {
         active = false
         print("screenshots written to \(out.path)")
         return 0
+    }
+
+    /// A single view (sheet or settings page) rendered on its own.
+    private static func shotView<V: View>(_ view: V, _ name: String, _ size: NSSize, _ dir: URL) async {
+        let win = NSWindow(contentRect: NSRect(origin: NSPoint(x: -20000, y: -20000), size: size),
+                           styleMask: [.borderless], backing: .buffered, defer: false)
+        win.appearance = NSAppearance(named: .darkAqua)
+        win.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height).background(Theme.bg1))
+        host.frame = NSRect(origin: .zero, size: size)
+        win.contentView = host
+        win.orderFrontRegardless()
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        host.layoutSubtreeIfNeeded()
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+        rep.size = size
+        host.cacheDisplay(in: host.bounds, to: rep)
+        if let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: dir.appendingPathComponent(name))
+            print("wrote \(name) (\(data.count / 1024) KB)")
+        }
+        win.orderOut(nil)
+        win.contentView = nil
     }
 
     private static func shot(_ store: StudioStore, _ name: String, _ dir: URL) async {
