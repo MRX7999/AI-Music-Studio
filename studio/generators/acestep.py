@@ -16,6 +16,11 @@ import requests
 from .base import (GeneratedTrack, GenerationError, GenerationRequest, Generator, check_cancel, download,
                    safe_name, sleep_with_cancel, unique_path)
 
+EDIT_TASKS = ("repaint", "cover", "extract", "lego", "complete")
+BASE_ONLY_TASKS = ("extract", "lego", "complete")   # turbo/SFT models support only repaint and cover
+TRACK_NAMES = ["woodwinds", "brass", "fx", "synth", "strings", "percussion", "keyboard", "guitar", "bass", "drums",
+               "backing_vocals", "vocals"]
+
 LANGS = ["ru", "en", "zh", "ja", "ko", "es", "fr", "de", "it", "pt", "uk", "pl", "tr", "unknown"]
 
 
@@ -116,6 +121,25 @@ class AceStepGenerator(Generator):
             payload["inference_steps"] = int(payload["inference_steps"])
         return payload
 
+    def _post_form(self, path: str, payload: dict, files: dict):
+        """multipart/form-data: file uploads (src_audio / reference_audio) + every field as text."""
+        h = {k: v for k, v in self._headers().items() if k != "Content-Type"}
+        data = {k: (json.dumps(v) if isinstance(v, (list, dict)) else
+                    ("true" if v is True else "false" if v is False else str(v)))
+                for k, v in payload.items() if v is not None}
+        opened = {k: (Path(p).name, open(p, "rb")) for k, p in files.items()}
+        try:
+            r = requests.post(self.base_url + path, headers=h, data=data, files=opened, timeout=max(self.timeout, 300))
+        finally:
+            for _, fh in opened.values():
+                fh.close()
+        if r.status_code >= 400:
+            raise GenerationError(f"ACE-Step {path}: HTTP {r.status_code} {r.text[:300]}")
+        body = r.json()
+        if body.get("code") not in (None, 200) or body.get("error"):
+            raise GenerationError(f"ACE-Step {path}: {body.get('error') or body}")
+        return body
+
     def generate(self, req: GenerationRequest, out_dir: Path, progress=None, cancel=None) -> list[GeneratedTrack]:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -123,15 +147,20 @@ class AceStepGenerator(Generator):
         if not ok:
             raise GenerationError(f"ACE-Step недоступен: {status}")
         payload = self.build_payload(req)
+        title = safe_name(req.title or req.style[:40], "ACE-Step")
+        expected = 20 + req.duration * 0.6 * max(1, payload["batch_size"])
+        return self._run_task(payload, {}, out_dir, title, req.lyrics, req.style, expected, progress, cancel)
+
+    def _run_task(self, payload: dict, files: dict, out_dir: Path, title: str, lyrics: str, style: str,
+                  expected: float, progress, cancel, extra_meta: dict | None = None) -> list[GeneratedTrack]:
         if progress:
             progress(0.02, "ACE-Step: отправка задачи")
-        body = self._post("/release_task", payload)
+        body = self._post_form("/release_task", payload, files) if files else self._post("/release_task", payload)
         task_id = (body.get("data") or {}).get("task_id")
         if not task_id:
             raise GenerationError(f"ACE-Step не вернул task_id: {body}")
 
         t0 = time.time()
-        expected = 20 + req.duration * 0.6 * max(1, payload["batch_size"])
         results = None
         while True:
             check_cancel(cancel)
@@ -153,7 +182,6 @@ class AceStepGenerator(Generator):
             sleep_with_cancel(2.0, cancel)
 
         tracks = []
-        title = safe_name(req.title or req.style[:40], "ACE-Step")
         for i, r in enumerate(results or []):
             if r.get("status") == 2 or not r.get("file"):
                 continue
@@ -165,11 +193,13 @@ class AceStepGenerator(Generator):
                 progress(0.92 + 0.07 * i / max(len(results), 1), f"Загрузка: {dst.name}")
             download(url, dst, headers=self._headers(), cancel=cancel)
             metas = r.get("metas") or {}
-            t = GeneratedTrack(path=dst, title=name, lyrics=r.get("lyrics") or req.lyrics, engine=self.id,
-                               meta={"prompt": r.get("prompt") or req.style, "bpm": metas.get("bpm"),
-                                     "key": metas.get("keyscale"), "duration": metas.get("duration"),
-                                     "seed": r.get("seed_value"), "dit_model": r.get("dit_model"),
-                                     "lm_model": r.get("lm_model"), "task_id": task_id})
+            meta = {"prompt": r.get("prompt") or style, "bpm": metas.get("bpm"),
+                    "key": metas.get("keyscale"), "duration": metas.get("duration"),
+                    "seed": r.get("seed_value"), "dit_model": r.get("dit_model"),
+                    "lm_model": r.get("lm_model"), "task_id": task_id,
+                    "task_type": payload.get("task_type", "text2music")}
+            meta.update(extra_meta or {})
+            t = GeneratedTrack(path=dst, title=name, lyrics=r.get("lyrics") or lyrics, engine=self.id, meta=meta)
             t.save_sidecar()
             tracks.append(t)
         if not tracks:
@@ -177,3 +207,68 @@ class AceStepGenerator(Generator):
         if progress:
             progress(1.0, f"Готово: {len(tracks)} трек(а)")
         return tracks
+
+    # ── редактирование готовой песни (любого источника: ACE-Step, Suno/GPTunneL, свой файл) ──
+    def build_edit_payload(self, task: str, start: float = 0.0, end: float = -1.0, prompt: str = "",
+                           lyrics: str = "", track: str = "", track_classes: list | None = None,
+                           strength: float | None = None, repaint_mode: str = "balanced",
+                           repaint_strength: float = 0.5, model: str = "", seed: int | None = None,
+                           steps: int | None = None, variations: int = 1, audio_format: str = "flac",
+                           language: str = "unknown", duration: float | None = None) -> dict:
+        if task not in EDIT_TASKS:
+            raise GenerationError(f"ACE-Step: неизвестная задача {task}")
+        if task in BASE_ONLY_TASKS and model and "base" not in model:
+            raise GenerationError(f"ACE-Step: «{task}» работает только с base-моделью (не turbo/SFT)")
+        if task == "repaint" and end != -1 and end <= start:
+            raise GenerationError("ACE-Step: конец фрагмента должен быть позже начала")
+        p = {
+            "task_type": task, "prompt": prompt, "lyrics": lyrics,
+            "batch_size": int(min(max(variations, 1), 4)), "audio_format": audio_format,
+            "use_random_seed": seed is None, "seed": int(seed) if seed is not None else -1,
+            "vocal_language": language if language in LANGS else "unknown",
+            "thinking": False,
+        }
+        if steps:
+            p["inference_steps"] = int(steps)
+        if model:
+            p["model"] = model
+        if duration:
+            p["audio_duration"] = float(duration)
+        if task == "repaint":
+            p.update({"repainting_start": float(max(start, 0.0)), "repainting_end": float(end),
+                      "repaint_mode": repaint_mode if repaint_mode in ("conservative", "balanced", "aggressive")
+                      else "balanced", "repaint_strength": float(min(max(repaint_strength, 0.0), 1.0)),
+                      "chunk_mask_mode": "explicit", "repaint_wav_crossfade_sec": 0.25})
+        if task == "cover":
+            p["audio_cover_strength"] = float(min(max(strength if strength is not None else 0.5, 0.0), 1.0))
+        if task in ("extract", "lego"):
+            if track and track not in TRACK_NAMES:
+                raise GenerationError(f"ACE-Step: дорожка {track} не из списка {', '.join(TRACK_NAMES)}")
+            if track:
+                p["track_name"] = track
+        if task == "complete" and track_classes:
+            p["track_classes"] = [t for t in track_classes if t in TRACK_NAMES]
+        return p
+
+    def edit(self, src: str | Path, task: str, out_dir: Path, title: str = "", progress=None, cancel=None,
+             **kw) -> list[GeneratedTrack]:
+        src = Path(src)
+        if not src.exists():
+            raise GenerationError(f"Нет файла {src}")
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ok, status = self.is_available()
+        if not ok:
+            raise GenerationError(f"ACE-Step недоступен: {status}")
+        payload = self.build_edit_payload(task, **kw)
+        label = {"repaint": "перегенерация", "cover": "кавер", "extract": "извлечение", "lego": "новая дорожка",
+                 "complete": "дополнение"}[task]
+        name = safe_name(title or src.stem, "ACE-Step") + f" — {label}"
+        if task == "repaint":
+            e = kw.get("end", -1)
+            name += f" {kw.get('start', 0):.0f}-{'конец' if e == -1 else f'{e:.0f}'}с"
+        if task in ("extract", "lego") and kw.get("track"):
+            name += f" {kw['track']}"
+        extra = {"source": str(src), "edit": {k: v for k, v in payload.items() if k not in ("lyrics", "prompt")}}
+        return self._run_task(payload, {"src_audio": src}, out_dir, name, kw.get("lyrics", ""), kw.get("prompt", ""),
+                              90.0, progress, cancel, extra)

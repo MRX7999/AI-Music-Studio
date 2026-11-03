@@ -64,7 +64,7 @@ TECHNIQUES_EN = {
 }
 
 STEM_METHODS_EN = {
-    "hpss": "Built-in (fast, no models)", "demucs": "Demucs htdemucs_6s (neural, more accurate)",
+    "hpss": "Built-in (fast, no models)", "demucs": "Demucs htdemucs_6s (neural, more accurate; MLX or PyTorch)",
     "none": "Do not split (one channel)",
 }
 
@@ -115,6 +115,26 @@ FRAGMENTS_EN = [
     ("ACE-Step: генерация… ", "ACE-Step: generating… "), (" (по умолчанию)", " (default)"),
 ]
 
+# New modules (v1.2) report in English: English prefix → Russian prefix for lang=ru.
+MESSAGES_RU = [
+    ("AI check: ", "Проверка на ИИ: "), ("Z-Image Turbo (MLX): generating", "Z-Image Turbo (MLX): генерация обложки"),
+    ("Procedural cover from the song spectrum", "Процедурная обложка из спектра песни"),
+    ("Cover ready", "Обложка готова"), ("RVC: converting the take", "RVC: преобразование дубля"),
+    ("RVC done", "RVC: готово"), ("Matchering: analysing the reference", "Matchering: анализ референса"),
+    ("Reference master ready", "Мастер по референсу готов"),
+    ("Reference match: comparing spectra", "Референс: сравнение спектров"), ("Reference match: EQ", "Референс: эквализация"),
+    ("Reference match: loudness", "Референс: громкость"),
+    ("Built-in bandwidth extension", "Встроенное расширение полосы"),
+    ("Package: 44.1 kHz / 24-bit master", "Пакет: мастер 44.1 кГц / 24 бит"), ("Package ready: ", "Пакет готов: "),
+    ("Telegram: uploading", "Telegram: отправка"), ("YouTube: uploaded", "YouTube: загружено"),
+    ("Rendering video (ffmpeg)", "Рендер видео (ffmpeg)"), ("Lyrics: ", "Текст: "),
+    ("Super-resolution: ", "Расширение спектра: "), ("Bandwidth ", "Полоса "),
+    ("Fakeprint: ", "Fakeprint: "), ("Sightengine: ", "Sightengine: "), ("ACRCloud: ", "ACRCloud: "),
+    ("Splicing", "Склейка"), ("Spectrum analysis", "Анализ спектра"),
+]
+FRAGMENTS_RU = [(" lines timed", " строк с таймингом"), (" kHz", " кГц"), ("uploading", "загрузка"),
+                ("analysing", "анализ")]
+
 _TABLES = {
     "scene": SCENES_EN, "mic": MICS_EN, "pattern": PATTERNS_EN, "instrument": INSTRUMENTS_EN,
     "preamp": PREAMPS_EN, "tape": TAPES_EN, "ambience": AMBIENCE_EN, "technique": TECHNIQUES_EN,
@@ -136,7 +156,17 @@ def localized(kind: str, item_id: str, field: str, ru_value: str, lang: str = "e
 
 def message(msg: str, lang: str = "en") -> str:
     """Translates engine progress messages by prefix; unknown messages pass through."""
-    if lang != "en" or not msg:
+    if not msg:
+        return msg
+    if lang == "ru":
+        for en, ru in MESSAGES_RU:
+            if msg.startswith(en):
+                msg = ru + msg[len(en):]
+                for a, b in FRAGMENTS_RU:
+                    msg = msg.replace(a, b)
+                break
+        return msg
+    if lang != "en":
         return msg
     for ru, en in MESSAGES_EN:
         if msg.startswith(ru):

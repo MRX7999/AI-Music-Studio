@@ -99,7 +99,7 @@ def project(client, tmp_path_factory):
 def test_ready_and_ping(client):
     assert client.ready["event"] == "ready"
     r = client.call("ping")
-    assert r["ok"] and r["version"] == "1.1.0" and r["lang"] == "en"
+    assert r["ok"] and r["version"] == "1.2.0" and r["lang"] == "en"
 
 
 def test_info_lists_catalogs_in_english(client):
@@ -259,3 +259,58 @@ def test_localize_names_follows_language_switch(client, project):
         client.call("config.set", {"lang": "en"})
     s = client.call("session.op", {"session": s, "op": "localize_names"})["session"]
     assert [c["name"] for c in s["channels"]] == ["Bass", "My bass"]
+
+
+# ── v1.2: tools, release pipeline, publishing guards, timeline edits ──
+
+def test_tools_doctor_and_config(client):
+    d = client.call("tools.doctor")
+    assert {"superres", "lyrics", "stems", "cover", "detect", "voice", "refmaster"} <= set(d["features"])
+    assert d["detectors"]["fakeprint"] is True and d["detectors"]["sightengine"] is False
+    r = client.call("config.set", {"tools": {"backends": {"cover": "builtin"}},
+                                   "secrets": {"TELEGRAM_CHAT_ID": "@test", "NOT_ALLOWED": "x"}})
+    assert r["secrets_set"] == ["TELEGRAM_CHAT_ID"]
+    assert client.call("tools.doctor")["features"]["cover"]["backend"] == "builtin"
+
+
+def test_release_pipeline_over_protocol(client, project, tmp_path):
+    root, res, _ = project
+    t = res["tracks"][0]
+    a = client.call("superres.analyze", {"path": t["path"], "export_sr": 48000})
+    assert a["cutoff_hz"] > 0 and "needs_superres" in a
+    png = client.call("spectrum.image", {"path": t["path"], "out": str(tmp_path / "s.png")})
+    assert Path(png["path"]).read_bytes()[:4] == b"\x89PNG"
+    rel = client.call("release.create", {"root": str(root), "source": t["path"], "title": "Server Song",
+                                         "artist": "CI", "lyrics": "[Verse]\nla la"})
+    for step, opts in (("cover", {"backend": "builtin", "seed": 1}), ("detect", {"detectors": ["fakeprint"]}),
+                       ("package", {})):
+        rel = client.call("release.step", {"root": str(root), "id": rel["id"], "step": step, "options": opts},
+                          timeout=180)
+    assert rel["ready"]["cover"] and rel["ready"]["detect"] and rel["ready"]["package"]
+    assert rel["ai_report"]["recommend_disclosure"] is True
+    assert client.call("release.list", {"root": str(root)})["releases"][0]["id"] == rel["id"]
+    with pytest.raises(RuntimeError, match="confirmation"):
+        client.call("publish.submit", {"root": str(root), "id": rel["id"], "services": {"package": {}}})
+    with pytest.raises(RuntimeError, match="Public visibility"):
+        client.call("publish.submit", {"root": str(root), "id": rel["id"], "confirmed": True,
+                                       "services": {"youtube": {"privacy": "public"}}})
+    out = client.call("publish.submit", {"root": str(root), "id": rel["id"], "confirmed": True,
+                                         "services": {"package": {}, "telegram": {}}}, timeout=180)
+    by = {j["service"]: j for j in out["jobs"]}
+    assert by["package"]["status"] == "done"
+    assert by["telegram"]["status"] == "failed" and "token" in by["telegram"]["error"]
+    q = client.call("publish.queue", {"root": str(root)})
+    assert len(q["jobs"]) == 2 and q["log"][0]["service"] == "package"
+    assert client.call("publish.remove", {"root": str(root), "job_id": by["telegram"]["id"]})["ok"]
+
+
+def test_edit_needs_acestep_and_splice_works(client, project, tmp_path):
+    root, res, _ = project
+    t = res["tracks"][0]
+    with pytest.raises(RuntimeError, match="ACE-Step"):
+        client.call("edit.run", {"path": t["path"], "task": "repaint", "start": 2, "end": 4, "root": str(root)})
+    r = client.call("edit.splice", {"original": t["path"], "edited": t["path"], "out": str(tmp_path / "sp.wav"),
+                                    "start": 2, "end": 4})
+    assert Path(r["path"]).exists() and r["shift_samples"] == 0
+    p = client.call("lyrics.parse", {"lrc": "[00:01.00]a\n[00:05.50]b\n"})
+    assert [ln["start"] for ln in p["lines"]] == [1.0, 5.5]

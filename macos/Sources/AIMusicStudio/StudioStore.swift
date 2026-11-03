@@ -3,7 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum AppMode: String, CaseIterable, Identifiable {
-    case generate, stage, mixer, master
+    case generate, stage, mixer, master, release
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ enum AppMode: String, CaseIterable, Identifiable {
         case .stage: return T("Stage", "Сцена")
         case .mixer: return T("Mixer", "Микшер")
         case .master: return T("Master & Export", "Мастер и экспорт")
+        case .release: return T("Release & Publish", "Релиз и публикация")
         }
     }
     var icon: String {
@@ -19,6 +20,7 @@ enum AppMode: String, CaseIterable, Identifiable {
         case .stage: return "person.3"
         case .mixer: return "slider.vertical.3"
         case .master: return "waveform"
+        case .release: return "paperplane"
         }
     }
     var shortcut: KeyEquivalent {
@@ -27,6 +29,7 @@ enum AppMode: String, CaseIterable, Identifiable {
         case .stage: return "2"
         case .mixer: return "3"
         case .master: return "4"
+        case .release: return "5"
         }
     }
 }
@@ -91,6 +94,11 @@ final class StudioStore: ObservableObject {
     @Published var settingUp = false
     let engine = EngineClient()
     let player = AudioPlayer()
+    lazy var releases = ReleaseStore(studio: self)
+    lazy var recorder = Recorder(studio: self)
+    /// Song or mix opened in the "Regenerate part" sheet.
+    @Published var regenTarget: RegenTarget?
+    @Published var showRecorder = false
 
     // MARK: preferences
     @Published var languageSetting: String {
@@ -279,7 +287,51 @@ final class StudioStore: ObservableObject {
         if !acestepURL.isEmpty { p["acestep_url"] = .s(acestepURL) }
         if let k = Keychain.get("acestep_key"), !k.isEmpty { p["acestep_key"] = .s(k) }
         if let k = Keychain.get("gptunnel_key"), !k.isEmpty { p["gptunnel_key"] = .s(k) }
+        p["secrets"] = .object(Self.publishSecrets())
+        p["tools"] = ToolSettings.load().payload
         _ = try await engine.call("config.set", p)
+    }
+
+    /// Keychain account → engine variable. Values never leave the engine process.
+    static let secretAccounts: [(account: String, env: String)] = [
+        ("telegram_token", "TELEGRAM_BOT_TOKEN"), ("telegram_chat", "TELEGRAM_CHAT_ID"),
+        ("youtube_client_id", "YOUTUBE_CLIENT_ID"), ("youtube_client_secret", "YOUTUBE_CLIENT_SECRET"),
+        ("youtube_refresh", "YOUTUBE_REFRESH_TOKEN"), ("sightengine_user", "SIGHTENGINE_API_USER"),
+        ("sightengine_secret", "SIGHTENGINE_API_SECRET"), ("acrcloud_token", "ACRCLOUD_TOKEN"),
+        ("acrcloud_container", "ACRCLOUD_CONTAINER_ID"), ("acrcloud_region", "ACRCLOUD_REGION"),
+    ]
+
+    static func publishSecrets() -> [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        for (acc, env) in secretAccounts {
+            if let v = Keychain.get(acc), !v.isEmpty { out[env] = .s(v) }
+        }
+        return out
+    }
+
+    /// Saves (or with an empty string removes) publishing/detector secrets and pushes them to the engine.
+    func savePublishSecrets(_ values: [String: String]) async {
+        var push: [String: JSONValue] = [:]
+        for (acc, env) in Self.secretAccounts {
+            guard let v = values[acc] else { continue }
+            Keychain.set(acc, v)
+            push[env] = .s(v)
+        }
+        guard engineState.isReady else { return }
+        do {
+            _ = try await engine.call("config.set", ["secrets": .object(push)])
+            await releases.refreshDoctor()
+            show(T("Settings saved", "Настройки сохранены"))
+        } catch { fail(error) }
+    }
+
+    func pushToolSettings(_ t: ToolSettings) async {
+        t.save()
+        guard engineState.isReady else { return }
+        do {
+            _ = try await engine.call("config.set", ["tools": t.payload])
+            await releases.refreshDoctor()
+        } catch { fail(error) }
     }
 
     func saveSecrets(acestepKey: String?, gptunnelKey: String?) async {

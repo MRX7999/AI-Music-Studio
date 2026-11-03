@@ -19,18 +19,25 @@ import numpy as np
 from scipy.ndimage import median_filter
 from scipy.signal import istft, sosfiltfilt, stft
 
-from . import dsp
+from . import dsp, tools
 from .audio_io import read_audio, write_audio
 
 METHODS = {
     "hpss": "Встроенный (быстро, без моделей)",
-    "demucs": "Demucs htdemucs_6s (нейросеть, точнее)",
+    "demucs": "Demucs htdemucs_6s (нейросеть, точнее; MLX или PyTorch)",
     "none": "Не разделять (один канал)",
 }
 
 
 def demucs_available() -> bool:
-    return importlib.util.find_spec("demucs") is not None
+    """Demucs как отдельная утилита (demucs-mlx / demucs через uv tool) или модуль в этом Python."""
+    return demucs_tool() is not None or importlib.util.find_spec("demucs") is not None
+
+
+def demucs_tool() -> str | None:
+    """id утилиты: demucs_mlx на Apple Silicon в приоритете, затем PyTorch-версия."""
+    b = tools.resolve_backend("stems")
+    return b if b in ("demucs_mlx", "demucs") else None
 
 
 def available_methods() -> dict:
@@ -61,8 +68,17 @@ def separate(path: str | Path, out_dir: str | Path, method: str = "hpss", progre
 
 def _demucs(path: Path, out_dir: Path, model: str, progress, cancel) -> dict:
     if not demucs_available():
-        raise RuntimeError("Demucs не установлен: pip install -r requirements-ml.txt "
-                           "или выберите встроенный метод")
+        raise RuntimeError("Demucs не установлен: uv tool install demucs-mlx==1.6.1 "
+                           "(или demucs==4.0.1), либо выберите встроенный метод")
+    tool = demucs_tool()
+    if tool:
+        if progress:
+            progress(0.05, f"Demucs {model} ({tools.TOOLS[tool].label}): разделение")
+        argv = tools.build_argv(tool, {"model": model, "outdir": str(out_dir), "input": str(path)})
+        tools.run(argv, progress=progress, cancel=cancel, lo=0.05, hi=0.95, label="Demucs", timeout=3 * 3600)
+        found = sorted(out_dir.rglob("*.wav"))
+        stems = {p.stem: p for p in found if p.stem in ("vocals", "drums", "bass", "guitar", "piano", "other")}
+        return _keep_nonempty(stems, out_dir, progress)
     if progress:
         progress(0.05, f"Demucs {model}: разделение (может занять несколько минут)")
     cmd = [sys.executable, "-m", "demucs", "-n", model, "-o", str(out_dir), str(path)]
@@ -83,6 +99,10 @@ def _demucs(path: Path, out_dir: Path, model: str, progress, cancel) -> dict:
         raise RuntimeError("Demucs завершился с ошибкой:\n" + "\n".join(tail))
     res_dir = out_dir / model / path.stem
     stems = {p.stem: p for p in sorted(res_dir.glob("*.wav"))}
+    return _keep_nonempty(stems, res_dir, progress)
+
+
+def _keep_nonempty(stems: dict, res_dir: Path, progress) -> dict:
     if not stems:
         raise RuntimeError(f"Demucs не создал стемы в {res_dir}")
     # пустые стемы (например, нет гитары) не нужны на пульте

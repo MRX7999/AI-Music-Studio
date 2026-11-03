@@ -11,12 +11,16 @@ struct SettingsView: View {
                 .tabItem { Label(T("General", "Основные"), systemImage: "gearshape") }
             GeneratorSettings()
                 .tabItem { Label(T("Generators", "Генераторы"), systemImage: "wand.and.stars") }
+            AIModelsSettings()
+                .tabItem { Label(T("AI Models", "AI-модели"), systemImage: "brain") }
+            PublishingSettings()
+                .tabItem { Label(T("Publishing", "Публикация"), systemImage: "paperplane") }
             EngineSettings()
                 .tabItem { Label(T("Engine", "Движок"), systemImage: "cpu") }
             AboutSettings()
                 .tabItem { Label(T("About", "О программе"), systemImage: "info.circle") }
         }
-        .frame(width: 640, height: 500)
+        .frame(width: 760, height: 600)
         .preferredColorScheme(.dark)
         .id(store.langCode)
     }
@@ -352,6 +356,6 @@ private struct AboutSettings: View {
 
 enum AppInfo {
     static var version: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.1.0"
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.2.0"
     }
 }

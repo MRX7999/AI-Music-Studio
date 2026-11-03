@@ -27,6 +27,8 @@ struct RootView: View {
         } message: {
             Text(store.alertText ?? "")
         }
+        .sheet(item: $store.regenTarget) { t in RegenerateSheet(target: t).environmentObject(store) }
+        .sheet(isPresented: $store.showRecorder) { RecordView(rec: store.recorder).environmentObject(store) }
         .background(WindowConfigurator())
         .preferredColorScheme(.dark)
         .task { await store.bootstrap() }
@@ -40,6 +42,7 @@ extension AppMode {
         case .stage: return T("Stage", "Сцена")
         case .mixer: return T("Mixer", "Микшер")
         case .master: return T("Master", "Мастер")
+        case .release: return T("Release", "Релиз")
         }
     }
 }
@@ -87,6 +90,7 @@ private struct CenterView: View {
         case .stage: StageView()
         case .mixer: MixerView()
         case .master: MasterView()
+        case .release: ReleaseView(rs: store.releases)
         }
     }
 }
@@ -97,7 +101,7 @@ private struct TopBar: View {
     @EnvironmentObject var store: StudioStore
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ZStack(alignment: .leading) {                      // room for the window buttons
                 Color.clear.frame(width: 70, height: 1)
                 if Screenshots.active { ScreenshotTrafficLights() }
@@ -112,7 +116,7 @@ private struct TopBar: View {
             LCDDisplay(player: store.player)
             Segmented(selection: Binding(get: { store.listenSource }, set: { store.setListenSource($0) }),
                       options: [(false, T("Studio", "Студия")), (true, T("Original", "Оригинал"))], height: 24)
-                .frame(width: 136)
+                .frame(width: 128)
                 .disabled(store.session == nil)
                 .help(T("A/B: the studio preview or the original mix of the same region",
                         "A/B: превью студии или исходный микс того же фрагмента"))
@@ -129,6 +133,17 @@ private struct TopBar: View {
             IconButton(icon: "arrow.uturn.forward", help: T("Redo (⇧⌘Z)", "Повторить (⇧⌘Z)")) { store.redo() }
                 .disabled(!store.canRedo)
                 .opacity(store.canRedo ? 1 : 0.35)
+            IconButton(icon: "wand.and.rays", help: T("Regenerate part of the song (ACE-Step)", "Перегенерировать часть песни (ACE-Step)")) {
+                store.regenerateSessionSong()
+            }
+            .disabled(store.sourceMixPath == nil)
+            .opacity(store.sourceMixPath == nil ? 0.35 : 1)
+            IconButton(icon: "mic.circle", help: T("Record vocals into the session (⇧⌘R)", "Записать вокал в сессию (⇧⌘R)"),
+                       active: store.showRecorder) {
+                store.showRecorder = true
+            }
+            .disabled(store.session == nil)
+            .opacity(store.session == nil ? 0.35 : 1)
             RenderButton()
             EngineMenu()
             IconButton(icon: "sidebar.right", help: T("Inspector (⌥⌘I)", "Инспектор (⌥⌘I)"), active: store.showInspector) {
@@ -302,9 +317,10 @@ private struct RenderButton: View {
             }
         } else {
             Button { Task { await store.renderFinal() } } label: {
-                Label(T("Render", "Рендер"), systemImage: "square.and.arrow.down")
+                Label(T("Render", "Рендер"), systemImage: "square.and.arrow.down").lineLimit(1)
             }
             .buttonStyle(StudioButtonStyle(prominent: true, compact: true))
+            .fixedSize()
             .disabled(store.session == nil)
             .help(T("Render the full mix with the current settings (⌘R)", "Свести весь трек с текущими настройками (⌘R)"))
         }

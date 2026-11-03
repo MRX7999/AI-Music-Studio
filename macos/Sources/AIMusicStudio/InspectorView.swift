@@ -46,6 +46,7 @@ private struct InspectorHeader: View {
         switch store.mode {
         case .generate: return T("Results", "Результаты")
         case .master: return T("Export", "Экспорт")
+        case .release: return T("Publish queue", "Очередь публикации")
         case .stage, .mixer: return T("Room & recording", "Комната и запись")
         }
     }
@@ -54,6 +55,7 @@ private struct InspectorHeader: View {
         switch store.mode {
         case .generate: return "music.note.list"
         case .master: return "square.and.arrow.up"
+        case .release: return "tray.full"
         case .stage, .mixer: return "cube"
         }
     }
@@ -68,6 +70,8 @@ private struct InspectorContent: View {
             GenerationResultsPanel()
         case .master:
             if store.session != nil { ExportPanel() } else { InspectorPlaceholder() }
+        case .release:
+            PublishQueuePanel(rs: store.releases)
         case .stage, .mixer:
             if let id = store.selectedChannel, store.session?.channel(id) != nil {
                 ChannelInspector(id: id)

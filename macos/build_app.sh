@@ -2,7 +2,7 @@
 # Builds "AI Music Studio.app" for the host architecture and a zip for the release page.
 #
 #   macos/build_app.sh                    -> dist/AI Music Studio.app + dist/AI-Music-Studio-<ver>-macOS-<arch>.zip
-#   macos/build_app.sh --version 1.1.0 --out /tmp/dist
+#   macos/build_app.sh --version 1.2.0 --out /tmp/dist
 #
 # Needs macOS 14+ and Xcode 15+ or just the Command Line Tools (Swift 5.9+). No network access needed.
 # The Python engine (studio/ without the PyQt UI) and requirements-engine.txt are copied into
@@ -11,7 +11,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-VERSION="1.1.0"
+VERSION="1.2.0"
 OUT="$ROOT/dist"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,7 +63,9 @@ cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 
 # engine: the Python package without the PyQt UI, no caches
 mkdir -p "$APP/Contents/Resources/engine/studio"
-( cd "$ROOT/studio" && find . -type f -name '*.py' ! -path './ui/*' ) | while read -r f; do
+# .py plus bundled model data (fakeprint weights, its NOTICE)
+( cd "$ROOT/studio" && find . -type f \( -name '*.py' -o -name '*.npz' -o -name 'NOTICE' \) ! -path './ui/*' \
+    ! -path '*/__pycache__/*' ) | while read -r f; do
   mkdir -p "$APP/Contents/Resources/engine/studio/$(dirname "$f")"
   cp "$ROOT/studio/$f" "$APP/Contents/Resources/engine/studio/$f"
 done
@@ -91,6 +93,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>AI Music Studio records live vocals and instruments into your session. / Запись живого вокала и инструментов в сессию.</string>
   <key>NSHumanReadableCopyright</key><string>MIT License, github.com/MRX7999/AI-Music-Studio</string>
 </dict>
 </plist>
