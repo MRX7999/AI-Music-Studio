@@ -192,6 +192,7 @@ enum SelfTest {
             let folder = pk["meta"]?["package"]?.str("folder") ?? ""
             check("release: distributor package", !folder.isEmpty && FileManager.default.fileExists(
                 atPath: URL(fileURLWithPath: folder).appendingPathComponent("metadata.json").path), folder)
+            await v122Checks(eng, root: root, id: id, defaultAudio: pk["meta"]?["package"]?.str("audio") ?? "")
             var refused = false
             do {
                 _ = try await eng.call("publish.submit", ["root": .s(root.path), "id": .s(id), "services": ["package"]])
@@ -239,6 +240,39 @@ enum SelfTest {
                   row.map { String(format: "%.1f s", $0.num("duration")) } ?? "not listed")
         } catch {
             check("library: ACE-Step \"N/A\" metadata", false, error.localizedDescription)
+        }
+    }
+
+    /// 1.2.2: distributor package format (like Export) with tags, cover and lyrics inside the audio file.
+    /// Only WAV and FLAC here: they are written without ffmpeg, which a CI runner may not have.
+    private static func v122Checks(_ eng: EngineClient, root: URL, id: String, defaultAudio: String) async {
+        let wav = (try? Data(contentsOf: URL(fileURLWithPath: defaultAudio))) ?? Data()
+        check("package: WAV carries tags (LIST INFO + id3)", defaultAudio.hasSuffix(".wav")
+              && wav.range(of: Data("id3 ".utf8)) != nil && wav.range(of: Data("INAM".utf8)) != nil,
+              URL(fileURLWithPath: defaultAudio).lastPathComponent)
+        do {
+            let pk = try await eng.call("release.step", ["root": .s(root.path), "id": .s(id), "step": "package",
+                                                         "options": ["format": "flac", "sample_rate": 44100, "bit_depth": 16,
+                                                                     "dither": "tpdf", "embed_cover": true, "embed_lyrics": true]])
+            let p = pk["meta"]?["package"]
+            let path = p?.str("audio") ?? ""
+            let data = (try? Data(contentsOf: URL(fileURLWithPath: path))) ?? Data()
+            let head = data.prefix(4)
+            check("package: FLAC 16-bit with Vorbis tags and lyrics", path.hasSuffix(".flac")
+                  && head == Data("fLaC".utf8) && data.range(of: Data("TITLE=Selftest Release".utf8)) != nil
+                  && data.range(of: Data("LYRICS=hello".utf8)) != nil,
+                  "\(URL(fileURLWithPath: path).lastPathComponent), \(data.count) B")
+            let mj = URL(fileURLWithPath: p?.str("folder") ?? "").appendingPathComponent("metadata.json")
+            let md = (try? JSONSerialization.jsonObject(with: Data(contentsOf: mj))) as? [String: Any]
+            let embedded = md?["embedded_tags"] as? [String] ?? []
+            check("package: metadata.json format and embedded tags", md?["format"] as? String == "flac"
+                  && (md?["bit_depth"] as? NSNumber)?.intValue == 16 && embedded.contains("cover") && embedded.contains("lyrics"),
+                  embedded.joined(separator: ","))
+            let st = try await eng.call("release.get", ["root": .s(root.path), "id": .s(id)])
+            check("package: options remembered for the publish queue",
+                  st["meta"]?["package_options"]?.str("format") == "flac", st["meta"]?["package_options"]?.str("format") ?? "nil")
+        } catch {
+            check("package: FLAC 16-bit with Vorbis tags and lyrics", false, error.localizedDescription)
         }
     }
 

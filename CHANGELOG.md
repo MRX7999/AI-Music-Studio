@@ -1,5 +1,28 @@
 # Changelog · Изменения
 
+## 1.2.2 — 2026-11-04
+
+The distributor package now asks for the format, like Export, and writes the cover, lyrics and release data into the audio file.
+
+### Added
+- Release → Distributor package: format WAV, FLAC, ALAC or MP3; sample rate 44.1, 48, 88.2 or 96 kHz (MP3: 44.1 or 48); bit depth 16, 24 or 32-bit float (FLAC and ALAC: 16 or 24) with TPDF dither, or MP3 bitrate 128–320 kbps. The choice is remembered and the publish queue rebuilds the package with it.
+- Tags inside the audio file: title, artist, album artist, album, genre, release date and year, composer, lyricist, producer, label, copyright, ISRC, UPC, language (ISO 639-2), explicit flag, track 1/1, the AI note as a comment, plain lyrics and the 3000 px front cover. MP3: ID3v2.3; WAV: LIST INFO plus an ID3v2.3 chunk (read by Finder, Music, foobar2000, Mp3tag); FLAC: Vorbis comments and a PICTURE block; ALAC (M4A): iTunes atoms with the cover and lyrics. "Cover in the file" and "Lyrics in the file" switches.
+- Fields for album, release date, composer, lyricist, producer, label, copyright, ISRC, UPC and explicit next to the format; they are saved with the release and go to the tags and `metadata.json`.
+- `metadata.json` gains `file`, `format`, `mp3_bitrate_kbps`, `dither` and `embedded_tags`; `checks.json` gains `format` (warns about MP3 and 32-bit float, which distributors often refuse) and `tags`.
+
+### Changed
+- `lyrics.txt` holds plain lyrics without `[Verse]`-style tags, with a blank line between sections; it falls back to the LRC lines.
+- `package.build`, `release.step` (`package`) and the `package` publish job accept `format`, `sample_rate`, `bit_depth`, `mp3_bitrate`, `dither`, `embed_cover`, `embed_lyrics`. Without options the result is the same WAV 44.1 kHz / 24-bit as before, now with tags.
+- ALAC and MP3 need ffmpeg (`brew install ffmpeg`); WAV and FLAC are written without it. No new Python dependencies: the tags are written by `studio/tags.py`.
+
+### Добавлено
+- «Релиз» → «Пакет для дистрибьютора»: выбор формата как в экспорте — WAV, FLAC, ALAC или MP3, частота 44,1–96 кГц, разрядность 16/24/32-bit float с дизерингом TPDF или битрейт MP3 128–320 кбит/с. Выбор запоминается, очередь публикации собирает пакет с ним же.
+- Теги в самом аудиофайле: название, исполнитель, альбом, жанр, дата, композитор, автор текста, продюсер, лейбл, копирайт, ISRC, UPC, язык, explicit, пометка об ИИ, текст без меток разделов и обложка 3000 px. MP3 — ID3v2.3, WAV — LIST INFO и ID3, FLAC — Vorbis comments и PICTURE, ALAC — атомы iTunes.
+- Поля альбома, даты релиза, авторов, лейбла, копирайта, ISRC, UPC и explicit рядом с форматом; сохраняются в релизе.
+
+### Изменено
+- `lyrics.txt` — чистый текст без меток `[Куплет]`. ALAC и MP3 требуют ffmpeg, WAV и FLAC — нет. Новых зависимостей Python нет.
+
 ## 1.2.1 — 2026-11-04
 
 Fixes for three problems reported on 1.2.0.

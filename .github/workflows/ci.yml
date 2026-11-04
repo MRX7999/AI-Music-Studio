@@ -58,6 +58,18 @@ jobs:
       - name: Self-test (engine workflow, DSP, localization)
         run: |
           "dist/AI Music Studio.app/Contents/MacOS/AIMusicStudio" --selftest --python "$(python -c 'import sys; print(sys.executable)')"
+      - name: Screenshots of the real UI (for review)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          "dist/AI Music Studio.app/Contents/MacOS/AIMusicStudio" --screenshots "$RUNNER_TEMP/screenshots" --python "$(python -c 'import sys; print(sys.executable)')"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: screenshots
+          path: ${{ runner.temp }}/screenshots/*.png
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: AI-Music-Studio-macOS

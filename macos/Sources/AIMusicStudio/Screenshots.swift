@@ -101,6 +101,13 @@ enum Screenshots {
         rs.detectOpts.aigm = false
         await rs.create(path: track.str("path"), title: "Night Drive", lyrics: lyrics)
         rs.refOpts.reference = track.str("path")
+        rs.pkg.format = "wav"
+        rs.pkg.sampleRate = 44100
+        rs.pkg.bitDepth = 24
+        for (k, v) in [("album", "Night Drive"), ("release_date", "2026-12-01"), ("composer", "Andrei"),
+                       ("label", "Neon Records"), ("copyright", "2026 Andrei")] {
+            rs.metaStr(k).wrappedValue = v
+        }
         for step in [ReleaseStep.superres, .refmaster, .cover, .detect, .package] { await rs.run(step) }
         await rs.refreshDoctor()
         store.mode = .release
@@ -108,6 +115,7 @@ enum Screenshots {
         await shotView(RegenerateSheet(target: RegenTarget(path: track.str("path"), title: "Night Drive", lyrics: lyrics))
                            .environmentObject(store), "app-regenerate.png", NSSize(width: 820, height: 560), out)
         await shotView(ReleaseShowcase(rs: rs).environmentObject(store), "app-release-steps.png", NSSize(width: 900, height: 640), out)
+        await shotView(PackageShowcase(rs: rs).environmentObject(store), "app-release-package.png", NSSize(width: 900, height: 620), out)
         await shotView(AIModelsSettings().environmentObject(store), "app-ai-models.png", NSSize(width: 760, height: 600), out)
         await shotView(PublishingSettings().environmentObject(store), "app-publishing.png", NSSize(width: 760, height: 600), out)
 
@@ -118,6 +126,7 @@ enum Screenshots {
         await shot(store, "app-stage-ru.png", out)
         store.mode = .mixer
         await shot(store, "app-mixer-ru.png", out)
+        await shotView(PackageShowcase(rs: rs).environmentObject(store), "app-release-package-ru.png", NSSize(width: 900, height: 620), out)
 
         store.engine.stop()
         try? FileManager.default.removeItem(at: root)
