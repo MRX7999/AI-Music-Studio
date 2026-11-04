@@ -110,7 +110,7 @@ The same song matched to another one mastered to −11 LUFS: a linear-phase EQ t
 
 ## Quick start
 
-1. Get `AI-Music-Studio-1.2.2-macOS-arm64.zip` from the [latest release](https://github.com/MRX7999/AI-Music-Studio/releases/latest), unzip it and move **AI Music Studio.app** to Applications.
+1. Get `AI-Music-Studio-1.2.3-macOS-arm64.zip` from the [latest release](https://github.com/MRX7999/AI-Music-Studio/releases/latest), unzip it and move **AI Music Studio.app** to Applications.
 2. The app is signed ad hoc, not notarized, so the first launch needs one of these:
    - right-click the app → **Open** → **Open**, or
    - `xattr -dr com.apple.quarantine "/Applications/AI Music Studio.app"`
@@ -387,7 +387,7 @@ pip install -r requirements-dev.txt
 QT_QPA_PLATFORM=offscreen pytest -q
 ```
 
-120 Python tests cover DSP and loudness, the v1.2 tools (spectrum cutoff, bandwidth restore, splice bit-exactness, LRC alignment, fakeprint detector, release steps, built-in bandwidth extension and reference matcher, Telegram/YouTube request building against mocks, the publish confirmation guard, package formats and tags read back with mutagen), rendering in all ten rooms (LUFS within ±1.5, true peak ≤ −0.5 dBTP), pan from position, mute/solo, sessions, the engine server protocol, the ACE-Step and GPTunneL protocols against local mock servers, and the PyQt workflow from generation to recording. The macOS job builds the app bundle and runs `--selftest`, which drives the real engine through generate → session → scene → channel edit → undo → preview → meters → final render → save → library → release (built-in bandwidth extension, reference master, cover, fakeprint check, distributor package in WAV and FLAC with tags) → publish guard → splice → recorder timing math → Russian localization. CI runs both on every push.
+125 Python tests cover DSP and loudness, the v1.2 tools (spectrum cutoff, bandwidth restore, splice bit-exactness, LRC alignment, fakeprint detector, release steps, built-in bandwidth extension and reference matcher, Telegram/YouTube request building against mocks, the publish confirmation guard, package formats and tags read back with mutagen), rendering in all ten rooms (LUFS within ±1.5, true peak ≤ −0.5 dBTP), pan from position, mute/solo, sessions, the engine server protocol, the ACE-Step and GPTunneL protocols against local mock servers, and the PyQt workflow from generation to recording. The macOS job builds the app bundle and runs `--selftest`, which drives the real engine through generate → session → scene → channel edit → undo → preview → meters → final render → save → library → release (built-in bandwidth extension, reference master, cover, fakeprint check, distributor package in WAV and FLAC with tags) → publish guard → splice → recorder timing math → Russian localization. CI runs both on every push.
 
 </details>
 

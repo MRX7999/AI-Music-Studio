@@ -652,6 +652,10 @@ private struct AICheckCard: View {
                             if !r.str("likely_source").isEmpty {
                                 Text(r.str("likely_source")).font(.system(size: 10)).foregroundColor(Theme.text3)
                             }
+                            if let ms = r["models"]?.object, !ms.isEmpty {     // AIGM: score of each model in the ensemble
+                                Text(ms.keys.sorted().map { "\($0) \(String(format: "%.2f", ms[$0]?.double ?? 0))" }.joined(separator: " · "))
+                                    .font(.system(size: 10)).foregroundColor(Theme.text3).lineLimit(1).textSelection(.enabled)
+                            }
                         } else {
                             Text(r.str("error")).font(.system(size: 10)).foregroundColor(Theme.text3).lineLimit(2)
                                 .textSelection(.enabled)

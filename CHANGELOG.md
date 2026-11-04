@@ -1,5 +1,17 @@
 # Changelog · Изменения
 
+## 1.2.3 — 2026-11-04
+
+### Fixed
+- AI check → AIGM ensemble failed with "aigm-detector: ensemble_score missing". The pinned aigm-detector (83db9ac) prints `ai_probability`, `model_scores` and `models`; the studio expected `ensemble_score` and `individual_results`. The result is now read from both layouts, also when the CLI prints a list or status lines around the JSON, and a failed run shows the CLI's last line.
+- The studio asked for the model `specttra_120s`, which aigm-detector does not have: it skipped it and ran fakeprint alone. The studio now asks for `default` (spectttra-alpha-120s + fakeprint), the ensemble the tool recommends.
+- The AI check card shows the score of each model in the AIGM ensemble.
+
+### Исправлено
+- «Проверка на ИИ» → ансамбль AIGM падал с ошибкой «aigm-detector: ensemble_score missing»: закреплённая версия aigm-detector выдаёт `ai_probability` и `model_scores`, а студия ждала `ensemble_score`. Теперь читаются оба формата.
+- Студия запрашивала несуществующую модель `specttra_120s`, и aigm-detector запускал только fakeprint. Теперь запрашивается `default` — spectttra-alpha-120s + fakeprint.
+- В карточке проверки видна оценка каждой модели ансамбля.
+
 ## 1.2.2 — 2026-11-04
 
 The distributor package now asks for the format, like Export, and writes the cover, lyrics and release data into the audio file.
