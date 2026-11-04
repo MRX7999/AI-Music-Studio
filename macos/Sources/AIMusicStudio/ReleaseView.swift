@@ -186,6 +186,7 @@ private struct ReleaseDetail: View {
                 ReferenceCard(rs: rs)
                 CoverCard(rs: rs)
                 LyricsCard(rs: rs)
+                HumanizeCard(rs: rs)
                 AICheckCard(rs: rs)
                 PackageCard(rs: rs)
                 PublishCard(rs: rs)
@@ -612,6 +613,50 @@ private struct LyricsCard: View {
             Text(T("Whisper (mlx-whisper on Apple Silicon) gives word timestamps; the app aligns your lyrics to them, so the LRC keeps your spelling. Lines Whisper missed are interpolated — check them by ear and edit times here.",
                    "Whisper (mlx-whisper на Apple Silicon) даёт тайминги слов; приложение выравнивает по ним ваш текст, поэтому в LRC остаётся ваше написание. Строки, которые Whisper не услышал, интерполируются — проверьте на слух и поправьте время здесь."))
                 .font(.system(size: 10)).foregroundColor(Theme.text3).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// The user's own humanization pass (humanize.py since 1.0.0): 12 subtle production steps,
+/// run once before the AI check. It is a sound-design step: disclosure of AI origin does not change.
+private struct HumanizeCard: View {
+    @ObservedObject var rs: ReleaseStore
+
+    private static let presets: [(String, String)] = [
+        ("ultra-low", "Ultra-low"), ("low", "Low"), ("medium", "Medium"), ("high", "High")]
+
+    var body: some View {
+        SectionCard(title: T("Humanize (before the AI check)", "Гуманизация (до проверки на ИИ)"), icon: "person.wave.2",
+                    trailing: AnyView(StepButton(rs: rs, step: .humanize, title: T("Process", "Обработать")))) {
+            ToggleRow(label: T("Use in this studio session", "Применять в этой сессии"), isOn: $rs.humOpts.enabled,
+                      help: T("On: Run All also runs this step. Off: run it only with the Process button.",
+                              "Вкл: «Сделать всё» тоже выполняет этот шаг. Выкл: шаг запускается только кнопкой «Обработать»."))
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    PickerRow(label: T("Preset", "Пресет"), selection: $rs.humOpts.preset, options: Self.presets, labelWidth: 70)
+                    TextRow(label: "Seed", text: $rs.humOpts.seed, placeholder: "42", labelWidth: 70)
+                }
+                ToggleRow(label: T("Without organic noise", "Без живого шума"), isOn: $rs.humOpts.skipNoise,
+                          help: T("Skip the pink noise, crackle and wow&flutter step (vinyl/room tone).",
+                                  "Пропустить шаг с розовым шумом, треском и wow&flutter (шум винила/комнаты)."))
+            }
+            Text(T("Your humanize module from the audio pipeline: pitch micro-warp, timing jitter, tape saturation, air exciter, stereo drift, EQ randomize, phase dither, subsample scatter and micro room reverb. ultra-low keeps the spectrum and timing intact and only changes the signature; medium and high are clearly audible. The step runs once before the AI check; the check itself never changes audio, and the AI disclosure in the publish step stays as it is.",
+                   "Твой модуль humanize из аудиоконвейера: питч-микроварп, джиттер тайминга, лентовая сатурация, воздух, стерео-дрейф, EQ-рандомизация, фазовый дизер, субсэмплинг-разброс и микрореверб комнаты. ultra-low сохраняет спектр и тайминг, меняя только сигнатуру; medium и high заметны на слух. Шаг выполняется один раз до проверки на ИИ; сама проверка звук не меняет, и раскрытие ИИ при публикации остаётся как есть."))
+                .font(.system(size: 10)).foregroundColor(Theme.text3).fixedSize(horizontal: false, vertical: true)
+            if let h = rs.current?["meta"]?["humanize"], !h.isNull {
+                let restored = h.flag("restored")
+                Text(restored
+                     ? T("Previous master restored (the pre-humanize file).", "Восстановлен прежний мастер (файл до гуманизации).")
+                     : T("Processed: \(h.str("preset")) preset, master_humanized.wav. Package and AI check use it.",
+                         "Обработано: пресет \(h.str("preset")), master_humanized.wav. Пакет и проверка на ИИ используют его."))
+                    .font(.system(size: 10)).foregroundColor(restored ? Theme.text3 : Theme.green)
+                if !restored {
+                    Button(T("Restore the pre-humanize master", "Вернуть мастер до гуманизации")) {
+                        Task { await rs.run(.humanize, extra: ["restore": .b(true)]) }
+                    }
+                    .buttonStyle(StudioButtonStyle(compact: true)).disabled(rs.running != nil)
+                }
+            }
         }
     }
 }

@@ -356,6 +356,6 @@ private struct AboutSettings: View {
 
 enum AppInfo {
     static var version: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.2.3"
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.3.0"
     }
 }

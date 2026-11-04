@@ -5,12 +5,12 @@ import time
 from pathlib import Path
 
 from .. import cover as cover_mod
-from .. import detect, lyrics, refmaster, superres
+from .. import detect, humanize as humanize_mod, lyrics, refmaster, superres
 from ..audio_io import read_audio
 from . import media, package, telegram, youtube
 from .release import PublishQueue, Release
 
-STEPS = ("superres", "refmaster", "cover", "lyrics", "detect", "package")
+STEPS = ("superres", "refmaster", "cover", "lyrics", "humanize", "detect", "package")
 
 
 def run_step(root: Path, rel: Release, step: str, opts: dict, keys: dict, progress=None, cancel=None) -> Release:
@@ -74,6 +74,33 @@ def run_step(root: Path, rel: Release, step: str, opts: dict, keys: dict, progre
             Path(res["srt"]).replace(folder / "lyrics.srt")
             rel.lrc, rel.srt = str(folder / "lyrics.lrc"), str(folder / "lyrics.srt")
             rel.meta["lyrics_info"] = {k: res[k] for k in ("backend", "language", "matched", "total")}
+    elif step == "humanize":
+        # the user's own humanization pass (studio/humanize.py, was humanize.py since 1.0.0):
+        # 12 production steps (pitch micro-warp, timing jitter, tape saturation, air, noise,
+        # stereo drift, EQ randomize, phase dither, subsample scatter, room reverb). Runs once
+        # before the AI check; audio is never changed based on the detector verdict.
+        preset = opts.get("preset", "ultra-low")
+        if preset not in humanize_mod.PRESETS:
+            preset = "ultra-low"
+        seed = opts.get("seed")
+        seed = int(seed) if str(seed).lstrip("-").isdigit() else 42
+        src = rel.master or rel.source
+        if opts.get("restore"):          # undo: package and detect go back to the pre-humanize master
+            prev = rel.meta.get("humanize", {}).get("input")
+            rel.master = prev or src
+            rel.meta["humanize"] = {"restored": True, "input": str(src)}
+        else:
+            out = folder / "master_humanized.wav"
+            humanize_mod.humanize(Path(src), out, preset=preset, seed=seed,
+                                  skip_noise=bool(opts.get("skip_noise")), skip_stretch=True,
+                                  verbose=False)
+            rel.meta["humanize"] = {"preset": preset, "seed": seed, "input": str(src),
+                                    "output": str(out), "skipped_noise": bool(opts.get("skip_noise"))}
+            rel.master = str(out)
+            tools_used = rel.meta.setdefault("ai", {}).setdefault("tools", [])
+            tag = f"humanization: {preset}"
+            if tag not in tools_used:
+                tools_used.append(tag)
     elif step == "detect":
         rep = detect.check(rel.master, detectors=opts.get("detectors") or None, keys=keys,
                            threshold=float(opts.get("threshold", 0.5)), progress=progress, cancel=cancel)

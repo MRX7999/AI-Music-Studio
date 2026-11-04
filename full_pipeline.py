@@ -31,7 +31,10 @@ warnings.filterwarnings('ignore')
 
 from pathlib import Path
 import numpy as np
-from humanize import humanize as do_humanize, PRESETS as HUMANIZE_PRESETS
+try:
+    from studio.humanize import humanize as do_humanize, PRESETS as HUMANIZE_PRESETS
+except ImportError:  # запуск из исходников репозитория без пакета studio в пути
+    from humanize import humanize as do_humanize, PRESETS as HUMANIZE_PRESETS
 
 # ── Ленивые импорты (не падать если что-то не стоит) ─────────
 def _import(name):
