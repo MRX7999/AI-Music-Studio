@@ -80,9 +80,14 @@ def run_step(root: Path, rel: Release, step: str, opts: dict, keys: dict, progre
         detect.save_report(rep, folder)
         rel.ai_report = rep
     elif step == "package":
-        res = package.build(rel.master, folder / "package", {"title": rel.title, "artist": rel.artist, **rel.meta},
+        # format options like in Export; the publish queue reuses the last ones chosen for this release
+        po = package.options(opts if any(k in opts for k in package.options({})) else
+                             rel.meta.get("package_options") or {})
+        rel.meta["package_options"] = po
+        res = package.build(rel.master, folder / "package",
+                            {**rel.meta, "title": rel.title, "artist": rel.artist},
                             cover=rel.cover or None, lyrics_text=rel.lyrics_text, lrc_path=rel.lrc or None,
-                            ai_report=rel.ai_report or None, progress=progress)
+                            ai_report=rel.ai_report or None, progress=progress, opts=po)
         rel.meta["package"] = res
     else:
         raise ValueError(f"unknown step {step}")
@@ -155,7 +160,8 @@ def run_job(root: Path, queue: PublishQueue, job: dict, keys: dict, progress=Non
             res = youtube.upload(mp4, body, cid, cs, rt, progress=progress, cancel=cancel, confirmed=True,
                                  confirm_public=bool(opts.get("confirm_public")))
         elif job["service"] == "package":
-            rel = run_step(root, rel, "package", {}, keys, progress, cancel)
+            po = {k: v for k, v in opts.items() if k in package.options({})}
+            rel = run_step(root, rel, "package", po, keys, progress, cancel)
             res = {"service": "package", "url": "", "folder": rel.meta["package"]["folder"],
                    "ok": rel.meta["package"]["ok"]}
         else:

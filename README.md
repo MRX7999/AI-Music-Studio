@@ -110,7 +110,7 @@ The same song matched to another one mastered to −11 LUFS: a linear-phase EQ t
 
 ## Quick start
 
-1. Get `AI-Music-Studio-1.2.1-macOS-arm64.zip` from the [latest release](https://github.com/MRX7999/AI-Music-Studio/releases/latest), unzip it and move **AI Music Studio.app** to Applications.
+1. Get `AI-Music-Studio-1.2.2-macOS-arm64.zip` from the [latest release](https://github.com/MRX7999/AI-Music-Studio/releases/latest), unzip it and move **AI Music Studio.app** to Applications.
 2. The app is signed ad hoc, not notarized, so the first launch needs one of these:
    - right-click the app → **Open** → **Open**, or
    - `xattr -dr com.apple.quarantine "/Applications/AI Music Studio.app"`
@@ -219,7 +219,7 @@ Detectors disagree and none is a proof; an [independent comparison of 8 detector
 
 - Telegram bots send audio up to 50 MB ([Bot API](https://core.telegram.org/bots/api)), so the app sends an MP3 320 kbps with tags and the cover.
 - A YouTube upload costs quota ([quota costs](https://developers.google.com/youtube/data/determine_quota_cost)); the AI flag is the `status.containsSyntheticMedia` field ([revision history](https://developers.google.com/youtube/data/revision_history)). OAuth clients in Testing mode expire the sign-in after 7 days.
-- Spotify, Apple Music and Yandex Music take releases only through a distributor ([Yandex Music terms](https://yandex.ru/support/music/ru/performers-and-copyright-holders/terms), [Apple Music](https://artists.apple.com/support/1108-get-your-next-release-on-apple-music)); the package folder has WAV 24-bit, the cover, lyrics, LRC, `metadata.json` with the AI disclosure, the AI-check report and SHA-256 sums.
+- Spotify, Apple Music and Yandex Music take releases only through a distributor ([Yandex Music terms](https://yandex.ru/support/music/ru/performers-and-copyright-holders/terms), [Apple Music](https://artists.apple.com/support/1108-get-your-next-release-on-apple-music)); the package folder has the audio file in the format you choose (WAV 16/24/32-bit float, FLAC or ALAC 16/24-bit at 44.1–96 kHz, or MP3 128–320 kbps; default WAV 44.1 kHz / 24-bit with TPDF dither), the cover, lyrics, LRC, `metadata.json` with the AI disclosure, the AI-check report and SHA-256 sums. The audio file carries its own tags: title, artist, album, genre, release date, composer, lyricist, producer, label, copyright, ISRC, UPC, language, explicit flag, plain lyrics, the 3000 px cover and the AI note (ID3v2.3 in MP3 and WAV, LIST INFO in WAV, Vorbis comments and PICTURE in FLAC, iTunes atoms in ALAC). Fill the fields in Release → Distributor package.
 
 </details>
 
@@ -387,7 +387,7 @@ pip install -r requirements-dev.txt
 QT_QPA_PLATFORM=offscreen pytest -q
 ```
 
-93 Python tests cover DSP and loudness, the v1.2 tools (spectrum cutoff, bandwidth restore, splice bit-exactness, LRC alignment, fakeprint detector, release steps, built-in bandwidth extension and reference matcher, Telegram/YouTube request building against mocks, the publish confirmation guard), rendering in all ten rooms (LUFS within ±1.5, true peak ≤ −0.5 dBTP), pan from position, mute/solo, sessions, the engine server protocol, the ACE-Step and GPTunneL protocols against local mock servers, and the PyQt workflow from generation to recording. The macOS job builds the app bundle and runs `--selftest`, which drives the real engine through generate → session → scene → channel edit → undo → preview → meters → final render → save → library → release (built-in bandwidth extension, reference master, cover, fakeprint check, distributor package) → publish guard → splice → recorder timing math → Russian localization. CI runs both on every push.
+120 Python tests cover DSP and loudness, the v1.2 tools (spectrum cutoff, bandwidth restore, splice bit-exactness, LRC alignment, fakeprint detector, release steps, built-in bandwidth extension and reference matcher, Telegram/YouTube request building against mocks, the publish confirmation guard, package formats and tags read back with mutagen), rendering in all ten rooms (LUFS within ±1.5, true peak ≤ −0.5 dBTP), pan from position, mute/solo, sessions, the engine server protocol, the ACE-Step and GPTunneL protocols against local mock servers, and the PyQt workflow from generation to recording. The macOS job builds the app bundle and runs `--selftest`, which drives the real engine through generate → session → scene → channel edit → undo → preview → meters → final render → save → library → release (built-in bandwidth extension, reference master, cover, fakeprint check, distributor package in WAV and FLAC with tags) → publish guard → splice → recorder timing math → Russian localization. CI runs both on every push.
 
 </details>
 

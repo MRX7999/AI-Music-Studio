@@ -127,6 +127,18 @@ struct ReleaseShowcase: View {
     }
 }
 
+/// The distributor package card on its own (screenshots).
+struct PackageShowcase: View {
+    @ObservedObject var rs: ReleaseStore
+
+    var body: some View {
+        PackageCard(rs: rs)
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Theme.bg0)
+    }
+}
+
 private struct ReleaseEmpty: View {
     @ObservedObject var rs: ReleaseStore
 
@@ -724,7 +736,14 @@ private struct PackageCard: View {
             Text(T("Spotify, Apple Music, Yandex Music, VK Music and Deezer accept music only through distributors (DistroKid, TuneCore, CD Baby, Onerpm, Zvonko…). The package has everything their upload forms ask for.",
                    "Spotify, Apple Music, Яндекс Музыка, VK Музыка и Deezer принимают музыку только через дистрибьюторов (DistroKid, TuneCore, CD Baby, Onerpm, Zvonko…). В пакете всё, что спрашивают их формы загрузки."))
                 .font(.system(size: 10)).foregroundColor(Theme.text3).fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 18) {
+                PackageFormatColumn(rs: rs).frame(width: 300)
+                Rectangle().fill(Theme.stroke).frame(width: 1)
+                PackageTagsColumn(rs: rs).frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 4)
             if let pk = rs.current?["meta"]?["package"], !pk.isNull {
+                Rectangle().fill(Theme.stroke).frame(height: 1)
                 ForEach(pk.list("checks"), id: \.self) { c in
                     HStack(spacing: 6) {
                         Image(systemName: c.flag("ok") ? "checkmark.circle.fill" : (c.str("level") == "error" ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"))
@@ -740,6 +759,109 @@ private struct PackageCard: View {
                         .buttonStyle(StudioButtonStyle(compact: true))
                 }
             }
+        }
+    }
+}
+
+/// Format of the audio file in the package — the same choices as Export (Master → Format).
+private struct PackageFormatColumn: View {
+    @EnvironmentObject var store: StudioStore
+    @ObservedObject var rs: ReleaseStore
+
+    var body: some View {
+        let o = rs.pkg
+        let needsFFmpeg = o.format == "mp3" || o.format == "alac"
+        let hasFFmpeg = store.info["deps"]?.flag("ffmpeg") ?? false
+        let rates: [(Double, String)] = o.format == "mp3"
+            ? [(44100.0, "44.1 kHz"), (48000.0, "48 kHz")]
+            : [(44100.0, "44.1 kHz"), (48000.0, "48 kHz"), (88200.0, "88.2 kHz"), (96000.0, "96 kHz")]
+        let depths: [(Double, String)] = o.format == "wav"
+            ? [(16.0, "16-bit"), (24.0, "24-bit"), (32.0, "32-bit float")]
+            : [(16.0, "16-bit"), (24.0, "24-bit")]
+        let hasCover = !(rs.current?.str("cover").isEmpty ?? true)
+        let hasLyrics = !(rs.current?.str("lyrics_text").isEmpty ?? true) || !(rs.current?.str("lrc").isEmpty ?? true)
+        VStack(alignment: .leading, spacing: 7) {
+            Caption(text: T("Audio file", "Аудиофайл"))
+            Segmented(selection: $rs.pkg.format, options: [("wav", "WAV"), ("flac", "FLAC"), ("alac", "ALAC"), ("mp3", "MP3")])
+            PickerRow(label: T("Sample rate", "Частота"), selection: $rs.pkg.sampleRate, options: rates, labelWidth: 96)
+            if o.format == "mp3" {
+                PickerRow(label: T("Bitrate", "Битрейт"), selection: $rs.pkg.mp3Bitrate,
+                          options: [(128.0, "128 kbps"), (192.0, "192 kbps"), (256.0, "256 kbps"), (320.0, "320 kbps")],
+                          labelWidth: 96)
+            } else {
+                PickerRow(label: T("Bit depth", "Разрядность"), selection: $rs.pkg.bitDepth, options: depths, labelWidth: 96)
+                PickerRow(label: T("Dither", "Дизеринг"), selection: $rs.pkg.dither,
+                          options: [("tpdf", "TPDF"), ("off", T("Off", "Выкл"))],
+                          help: o.bitDepth >= 32 ? T("Not used for 32-bit float", "Для 32-bit float не нужен")
+                                                 : T("Applied when reducing to 16/24-bit", "Применяется при понижении до 16/24 бит"),
+                          labelWidth: 96)
+            }
+            ToggleRow(label: T("Cover in the file", "Обложка в файле"), isOn: $rs.pkg.embedCover,
+                      help: T("Embeds the 3000 px cover (ID3 APIC, FLAC PICTURE, M4A covr)", "Встраивает обложку 3000 px (ID3 APIC, FLAC PICTURE, M4A covr)"))
+            ToggleRow(label: T("Lyrics in the file", "Текст в файле"), isOn: $rs.pkg.embedLyrics,
+                      help: T("Plain lyrics without [Verse] tags (ID3 USLT, FLAC LYRICS, M4A ©lyr)", "Текст без меток [Куплет] (ID3 USLT, FLAC LYRICS, M4A ©lyr)"))
+            if o.embedCover && !hasCover {
+                note(T("No cover yet: run the Cover step first.", "Обложки пока нет: сначала выполните шаг «Обложка»."), Theme.text3)
+            }
+            if o.embedLyrics && !hasLyrics {
+                note(T("This release has no lyrics.", "В этом релизе нет текста."), Theme.text3)
+            }
+            if o.format == "mp3" {
+                note(T("MP3 is lossy. Distributors ask for WAV or FLAC; use MP3 for previews and promo.",
+                       "MP3 сжат с потерями. Дистрибьюторы просят WAV или FLAC; MP3 — для превью и промо."), Theme.yellow)
+            } else if o.bitDepth >= 32 {
+                note(T("Many distributors accept only 16- or 24-bit WAV.", "Многие дистрибьюторы принимают только WAV 16 или 24 бит."), Theme.yellow)
+            }
+            if needsFFmpeg && !hasFFmpeg {
+                note(T("This format needs ffmpeg (brew install ffmpeg)", "Для этого формата нужен ffmpeg (brew install ffmpeg)"), Theme.yellow)
+            }
+        }
+    }
+
+    private func note(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.system(size: 10)).foregroundColor(color).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Release metadata written into the file tags and metadata.json. Saved with the release.
+private struct PackageTagsColumn: View {
+    @ObservedObject var rs: ReleaseStore
+
+    var body: some View {
+        let title = rs.current?.str("title") ?? ""
+        let artist = rs.current?.str("artist") ?? ""
+        let year = Calendar.current.component(.year, from: Date())
+        VStack(alignment: .leading, spacing: 7) {
+            Caption(text: T("Tags in the file", "Теги в файле"))
+            HStack(alignment: .top, spacing: 12) {
+                VStack(spacing: 6) {
+                    TextRow(label: T("Album", "Альбом"), text: rs.metaStr("album"),
+                            placeholder: title.isEmpty ? T("= title", "= название") : title, labelWidth: 86)
+                    TextRow(label: T("Release date", "Дата релиза"), text: rs.metaStr("release_date"),
+                            placeholder: T("e.g. ", "напр. ") + "\(year)-12-01", labelWidth: 86)
+                    TextRow(label: T("Composer", "Композитор"), text: rs.metaStr("composer"), placeholder: T("optional", "необязательно"), labelWidth: 86)
+                    TextRow(label: T("Lyricist", "Автор текста"), text: rs.metaStr("lyricist"), placeholder: T("optional", "необязательно"), labelWidth: 86)
+                    TextRow(label: T("Producer", "Продюсер"), text: rs.metaStr("producer"), placeholder: T("optional", "необязательно"), labelWidth: 86)
+                }
+                VStack(spacing: 6) {
+                    TextRow(label: T("Label", "Лейбл"), text: rs.metaStr("label"),
+                            placeholder: T("optional", "необязательно"), labelWidth: 70)
+                    TextRow(label: "Copyright", text: rs.metaStr("copyright"),
+                            placeholder: T("e.g. ", "напр. ") + (artist.isEmpty ? "\(year)" : "\(year) \(artist)"), labelWidth: 70)
+                    TextRow(label: "ISRC", text: rs.metaStr("isrc"), placeholder: "CC-XXX-YY-NNNNN", labelWidth: 70)
+                    TextRow(label: "UPC", text: rs.metaStr("upc"),
+                            placeholder: T("from the distributor", "от дистрибьютора"), labelWidth: 70)
+                    HStack {
+                        Toggle(T("Explicit lyrics", "Ненормативная лексика"), isOn: rs.metaBool("explicit"))
+                            .toggleStyle(.checkbox).font(.system(size: 11))
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: 24)
+                }
+            }
+            Text(T("Title, artist, genre and language come from the header; the cover and lyrics from their steps; the AI note from the disclosure. Empty fields are left out. ISRC and UPC usually come from the distributor after upload; add them here and rebuild if you have them.",
+                   "Название, исполнитель, жанр и язык берутся из шапки релиза, обложка и текст — из своих шагов, пометка ИИ — из раскрытия. Пустые поля не пишутся. ISRC и UPC обычно выдаёт дистрибьютор при загрузке: если они есть, впишите и пересоберите."))
+                .font(.system(size: 10)).foregroundColor(Theme.text3).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

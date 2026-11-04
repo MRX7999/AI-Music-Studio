@@ -68,6 +68,57 @@ struct DetectOptions: Equatable {
     }
 }
 
+/// Distributor package format, chosen like in Export. Remembered between launches.
+struct PackageOptions: Equatable {
+    private static func num(_ key: String, _ def: Double) -> Double {
+        let v = UserDefaults.standard.double(forKey: key)
+        return v > 0 ? v : def
+    }
+    private static func flag(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+
+    var format = UserDefaults.standard.string(forKey: "package.format") ?? "wav" {
+        didSet {
+            UserDefaults.standard.set(format, forKey: "package.format")
+            if format == "flac" || format == "alac", bitDepth > 24 { bitDepth = 24 }
+            if format == "mp3", sampleRate > 48000 { sampleRate = 48000 }
+        }
+    }
+    var sampleRate = PackageOptions.num("package.sampleRate", 44100) {
+        didSet { UserDefaults.standard.set(sampleRate, forKey: "package.sampleRate") }
+    }
+    var bitDepth = PackageOptions.num("package.bitDepth", 24) {
+        didSet { UserDefaults.standard.set(bitDepth, forKey: "package.bitDepth") }
+    }
+    var mp3Bitrate = PackageOptions.num("package.mp3Bitrate", 320) {
+        didSet { UserDefaults.standard.set(mp3Bitrate, forKey: "package.mp3Bitrate") }
+    }
+    var dither = UserDefaults.standard.string(forKey: "package.dither") ?? "tpdf" {
+        didSet { UserDefaults.standard.set(dither, forKey: "package.dither") }
+    }
+    var embedCover = PackageOptions.flag("package.embedCover") {
+        didSet { UserDefaults.standard.set(embedCover, forKey: "package.embedCover") }
+    }
+    var embedLyrics = PackageOptions.flag("package.embedLyrics") {
+        didSet { UserDefaults.standard.set(embedLyrics, forKey: "package.embedLyrics") }
+    }
+
+    var lossless: Bool { format != "mp3" }
+
+    /// "WAV 44.1 kHz / 24-bit", "MP3 320 kbps / 48 kHz"
+    var summary: String {
+        let khz = String(format: sampleRate.truncatingRemainder(dividingBy: 1000) == 0 ? "%.0f" : "%.1f", sampleRate / 1000)
+        if format == "mp3" { return "MP3 \(Int(mp3Bitrate)) kbps / \(khz) kHz" }
+        let depth = bitDepth >= 32 ? "32-bit float" : "\(Int(bitDepth))-bit"
+        return "\(format.uppercased()) \(khz) kHz / \(depth)"
+    }
+
+    var payload: [String: JSONValue] {
+        ["format": .s(format), "sample_rate": .n(Int(sampleRate)), "bit_depth": .n(Int(bitDepth)),
+         "mp3_bitrate": .n(Int(mp3Bitrate)), "dither": .s(dither), "embed_cover": .b(embedCover),
+         "embed_lyrics": .b(embedLyrics)]
+    }
+}
+
 struct PublishOptions: Equatable {
     var telegram = false
     var youtube = false
@@ -107,6 +158,7 @@ final class ReleaseStore: ObservableObject {
     @Published var coverOpts = CoverOptions()
     @Published var detectOpts = DetectOptions()
     @Published var pub = PublishOptions()
+    @Published var pkg = PackageOptions()
     @Published var lrcText = ""
     @Published var lrcLanguage = ""
     @Published var showConfirm = false
@@ -204,6 +256,14 @@ final class ReleaseStore: ObservableObject {
                 })
     }
 
+    func metaBool(_ key: String) -> Binding<Bool> {
+        Binding(get: { self.current?["meta"]?[key]?.bool ?? false },
+                set: { v in
+                    self.current?.updateObject("meta") { $0[key] = .b(v) }
+                    self.scheduleMetaSave()
+                })
+    }
+
     func field(_ key: String) -> Binding<String> {
         Binding(get: { self.current?[key]?.string ?? "" },
                 set: { v in
@@ -238,19 +298,35 @@ final class ReleaseStore: ObservableObject {
     }
 
     private var metaTask: Task<Void, Never>?
+    private var metaDirty = false
     private func scheduleMetaSave() {
+        metaDirty = true
         metaTask?.cancel()
         metaTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000)
-            guard let self, !Task.isCancelled, let c = self.current else { return }
-            var meta = c["meta"]?.object ?? [:]
-            if let tags = meta["tags"]?.string {           // "a, b" → ["a", "b"]
-                meta["tags"] = .array(tags.split(separator: ",").map { .s($0.trimmingCharacters(in: .whitespaces)) }
-                    .filter { $0.string?.isEmpty == false })
-            }
-            await self.update(["title": .s(c.str("title")), "artist": .s(c.str("artist")),
-                               "lyrics_text": .s(c.str("lyrics_text"))], meta: meta)
+            guard let self, !Task.isCancelled else { return }
+            await self.saveMeta()
         }
+    }
+
+    /// Sends edits that are still waiting for the debounce, so a step started right after typing
+    /// (for example Build package after filling ISRC) uses them and does not overwrite them.
+    func flushMeta() async {
+        metaTask?.cancel()
+        metaTask = nil
+        await saveMeta()
+    }
+
+    private func saveMeta() async {
+        guard metaDirty, let c = current else { return }
+        metaDirty = false
+        var meta = c["meta"]?.object ?? [:]
+        if let tags = meta["tags"]?.string {           // "a, b" → ["a", "b"]
+            meta["tags"] = .array(tags.split(separator: ",").map { .s($0.trimmingCharacters(in: .whitespaces)) }
+                .filter { $0.string?.isEmpty == false })
+        }
+        await update(["title": .s(c.str("title")), "artist": .s(c.str("artist")),
+                      "lyrics_text": .s(c.str("lyrics_text"))], meta: meta)
     }
 
     var tagsText: Binding<String> {
@@ -306,12 +382,13 @@ final class ReleaseStore: ObservableObject {
         case .detect:
             return ["detectors": .array(detectOpts.list.map { .s($0) }), "threshold": .n(detectOpts.threshold)]
         case .package:
-            return [:]
+            return pkg.payload
         }
     }
 
     func run(_ step: ReleaseStep, extra: [String: JSONValue] = [:]) async {
         guard let id = currentID, running == nil else { return }
+        await flushMeta()
         running = step.rawValue
         progress = 0
         message = step.title + "…"
@@ -375,7 +452,7 @@ final class ReleaseStore: ObservableObject {
 
     var services: [String: JSONValue] {
         var s: [String: JSONValue] = [:]
-        if pub.package { s["package"] = .object([:]) }
+        if pub.package { s["package"] = .object(pkg.payload) }
         if pub.telegram {
             var t: [String: JSONValue] = ["caption": .s(pub.caption), "silent": .b(pub.silent), "ai_note": .b(pub.aiNote)]
             if !pub.chatOverride.isEmpty { t["chat_id"] = .s(pub.chatOverride) }
@@ -402,8 +479,8 @@ final class ReleaseStore: ObservableObject {
         var out: [String] = []
         let name = c.str("artist").isEmpty ? c.str("title") : "\(c.str("artist")) — \(c.str("title"))"
         if pub.package {
-            out.append(T("Build the distributor package (44.1 kHz / 24-bit WAV, 3000 px cover, metadata, LRC, AI report) in releases/\(c.str("id"))/package.",
-                         "Собрать пакет для дистрибьютора (WAV 44.1 кГц / 24 бит, обложка 3000 px, метаданные, LRC, отчёт ИИ) в releases/\(c.str("id"))/package."))
+            out.append(T("Build the distributor package (\(pkg.summary), tags with cover and lyrics in the file, 3000 px cover, metadata, LRC, AI report) in releases/\(c.str("id"))/package.",
+                         "Собрать пакет для дистрибьютора (\(pkg.summary), теги с обложкой и текстом в файле, обложка 3000 px, метаданные, LRC, отчёт ИИ) в releases/\(c.str("id"))/package."))
         }
         if pub.telegram {
             let chat = pub.chatOverride.isEmpty ? (Keychain.get("telegram_chat") ?? "") : pub.chatOverride
@@ -427,6 +504,7 @@ final class ReleaseStore: ObservableObject {
 
     func publish() async {
         guard let id = currentID, running == nil else { return }
+        await flushMeta()
         showConfirm = false
         running = "publish"
         progress = 0
