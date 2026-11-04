@@ -11,5 +11,5 @@
   generators — движки генерации песен (ACE-Step, Suno через gptunnel, демо)
 """
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 APP_NAME = "AI Music Studio"

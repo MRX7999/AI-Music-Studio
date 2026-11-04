@@ -136,27 +136,63 @@ def fakeprint_score(audio: np.ndarray, sr: int) -> dict:
 
 # ------------------------------------------------------------------------------ others
 
-def _aigm(path: Path, progress=None, cancel=None, models: str = "specttra_120s,fakeprint") -> dict:
+def parse_aigm_output(out: str) -> dict:
+    """Result of `aigm-detector predict … --json` from the combined console output.
+
+    aigm-detector 83db9ac prints a few status lines ("Models: …", "Loading …") and then one JSON
+    object per file: {"file", "verdict", "ai_probability", "threshold", "backend",
+    "model_scores": {name: p}, "models": {name: {"score", "window_scores", …}}, "warnings"}.
+    Several files give a JSON list. Older builds used "ensemble_score" / "individual_results"."""
+    dec = json.JSONDecoder()
+    data = None
+    for i, ch in enumerate(out):
+        if ch not in "{[":
+            continue
+        try:
+            obj, _ = dec.raw_decode(out, i)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, list):
+            obj = next((o for o in obj if isinstance(o, dict)), None)
+        if isinstance(obj, dict) and any(k in obj for k in ("ai_probability", "ensemble_score", "score", "model_scores")):
+            data = obj
+            break
+    if data is None:
+        tail = [ln.strip() for ln in out.strip().splitlines() if ln.strip()][-1:]
+        raise RuntimeError("aigm-detector: no JSON result in the output" + (f" ({tail[0][:200]})" if tail else ""))
+    subs: dict[str, float] = {}
+    for name, v in (data.get("model_scores") or {}).items():
+        if isinstance(v, (int, float)):
+            subs[name] = round(float(v), 4)
+    for name, v in (data.get("models") or {}).items():
+        if isinstance(v, dict) and isinstance(v.get("score"), (int, float)):
+            subs.setdefault(name, round(float(v["score"]), 4))
+    for r in data.get("individual_results") or data.get("results") or []:
+        if isinstance(r, dict) and "model_name" in r and isinstance(r.get("score"), (int, float)):
+            subs.setdefault(r["model_name"], round(float(r["score"]), 4))
+    score = next((data[k] for k in ("ai_probability", "ensemble_score", "score")
+                  if isinstance(data.get(k), (int, float))), None)
+    if score is None and subs:
+        score = sum(subs.values()) / len(subs)
+    if score is None:
+        raise RuntimeError("aigm-detector: the result has no ai_probability")
+    res = {"score": round(float(score), 4), "models": subs}
+    if data.get("verdict"):
+        res["verdict"] = str(data["verdict"])
+    warnings = [str(w) for w in data.get("warnings") or []]
+    if warnings:
+        res["warnings"] = warnings
+    return res
+
+
+def _aigm(path: Path, progress=None, cancel=None, models: str = "default") -> dict:
+    """`models`: "default" = spectttra-alpha-120s + fakeprint (the ensemble aigm-detector recommends)."""
     backend = "mlx" if tools.is_apple_silicon() else "torch"
     argv = tools.build_argv("aigm", {"input": str(path), "models": models, "backend": backend})
-    out = tools.run(argv, progress=progress, cancel=cancel, timeout=1800, label="AIGM")
-    data = None
-    start = out.find("{")
-    while start != -1 and data is None:
-        try:
-            data = json.loads(out[start:])
-        except json.JSONDecodeError:
-            start = out.find("{", start + 1)
-    if not isinstance(data, dict):
-        raise RuntimeError("aigm-detector: no JSON in output")
-    score = data.get("ensemble_score", data.get("score"))
-    if score is None:
-        raise RuntimeError("aigm-detector: ensemble_score missing")
-    subs = {}
-    for r in data.get("individual_results") or data.get("results") or []:
-        if isinstance(r, dict) and "model_name" in r:
-            subs[r["model_name"]] = round(float(r.get("score", 0.0)), 4)
-    return {"score": round(float(score), 4), "models": subs}
+    # wide console: rich must not wrap the status lines or the JSON of a long path
+    out = tools.run(argv, progress=progress, cancel=cancel, timeout=1800, label="AIGM",
+                    env_extra={"COLUMNS": "1000", "NO_COLOR": "1", "TERM": "dumb"})
+    return parse_aigm_output(out)
 
 
 def _sightengine(path: Path, api_user: str, api_secret: str, session=None) -> dict:

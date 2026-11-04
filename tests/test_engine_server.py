@@ -99,7 +99,7 @@ def project(client, tmp_path_factory):
 def test_ready_and_ping(client):
     assert client.ready["event"] == "ready"
     r = client.call("ping")
-    assert r["ok"] and r["version"] == "1.2.2" and r["lang"] == "en"
+    assert r["ok"] and r["version"] == "1.2.3" and r["lang"] == "en"
 
 
 def test_info_lists_catalogs_in_english(client):

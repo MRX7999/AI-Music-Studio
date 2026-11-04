@@ -2,7 +2,7 @@
 # Builds "AI Music Studio.app" for the host architecture and a zip for the release page.
 #
 #   macos/build_app.sh                    -> dist/AI Music Studio.app + dist/AI-Music-Studio-<ver>-macOS-<arch>.zip
-#   macos/build_app.sh --version 1.2.2 --out /tmp/dist
+#   macos/build_app.sh --version 1.2.3 --out /tmp/dist
 #
 # Needs macOS 14+ and Xcode 15+ or just the Command Line Tools (Swift 5.9+). No network access needed.
 # The Python engine (studio/ without the PyQt UI) and requirements-engine.txt are copied into
@@ -11,7 +11,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-VERSION="1.2.2"
+VERSION="1.2.3"
 OUT="$ROOT/dist"
 while [ $# -gt 0 ]; do
   case "$1" in
