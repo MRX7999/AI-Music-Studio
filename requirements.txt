@@ -10,3 +10,5 @@ PyQt5==5.15.11
 # вкладка «Плейлист» (download_playlist.py): теги и обложки
 mutagen==1.47.0
 pillow==10.4.0
+# humanize step (Release): pitch micro-warp, timing jitter, air exciter
+librosa==0.11.0

@@ -127,6 +127,7 @@ MESSAGES_RU = [
     ("Built-in bandwidth extension", "Встроенное расширение полосы"),
     ("Package: 44.1 kHz / 24-bit master", "Пакет: мастер 44.1 кГц / 24 бит"), ("Package ready: ", "Пакет готов: "),
     ("Package: writing ", "Пакет: запись "), ("Package: ", "Пакет: "),
+    ("Humanize: ", "Гуманизация: "), ("Humanizing", "Гуманизирую"),
     ("Telegram: uploading", "Telegram: отправка"), ("YouTube: uploaded", "YouTube: загружено"),
     ("Rendering video (ffmpeg)", "Рендер видео (ffmpeg)"), ("Lyrics: ", "Текст: "),
     ("Super-resolution: ", "Расширение спектра: "), ("Bandwidth ", "Полоса "),
@@ -135,7 +136,8 @@ MESSAGES_RU = [
 ]
 FRAGMENTS_RU = [(" lines timed", " строк с таймингом"), (" kHz", " кГц"), ("uploading", "загрузка"),
                 ("analysing", "анализ"), (" with tags", " с тегами"), ("-bit float", " бит float"), ("-bit", " бит"),
-                (" kbps", " кбит/с")]
+                (" kbps", " кбит/с"), (" cents", " центов"), ("ms)", "мс)"), ("ms ", "мс "), (" bands", " полос"),
+                (" dB", " дБ"), ("%", "%")]
 
 
 def _ru_rate(rest: str) -> str:

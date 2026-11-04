@@ -31,7 +31,10 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-import librosa
+try:
+    import librosa
+except ImportError:                     # шаг Humanize в студии: понятная ошибка вместо падения движка
+    librosa = None
 from scipy.signal import sosfiltfilt, butter
 import warnings
 warnings.filterwarnings('ignore')
@@ -671,8 +674,6 @@ def _generate_rir(sr: int, room_dims: tuple, src_pos: tuple,
     rt60      : время реверберации в секундах
     max_order : максимальный порядок отражений (12 = достаточно для микро-RIR)
     """
-    from scipy.signal import fftconvolve
-
     if rng is None:
         rng = np.random.default_rng(42)
 
@@ -787,6 +788,8 @@ def humanize(src: Path, dst: Path, preset: str = 'medium',
              seed: int = 42, skip_noise: bool = False,
              skip_stretch: bool = False, verbose: bool = True):
     
+    if librosa is None:
+        raise RuntimeError("librosa is required for the humanize step: pip install librosa")
     p = PRESETS[preset]
     
     def log(msg):
@@ -844,7 +847,7 @@ def humanize(src: Path, dst: Path, preset: str = 'medium',
                                   level_db=p['noise_level'],
                                   seed=seed)
     else:
-        log(f"[5/11] Organic noise — пропущен")
+        log("[5/11] Organic noise — пропущен")
 
     # ── 5. Stereo micro-drift ────────────────────────────────
     log(f"[6/11] Stereo micro-drift ±{p['stereo_drift_ms']:.1f}ms...")
@@ -871,7 +874,7 @@ def humanize(src: Path, dst: Path, preset: str = 'medium',
                                     stretch_pct=p['stretch_pct'],
                                     seed=seed)
     else:
-        log(f"[9/11] Time-stretch — пропущен"
+        log("[9/11] Time-stretch — пропущен"
             + (" (stretch_pct=0)" if p['stretch_pct'] == 0 else ""))
 
     # ── 10. Micro-phase dithering ────────────────────────────
@@ -902,7 +905,6 @@ def humanize(src: Path, dst: Path, preset: str = 'medium',
 
     # True Peak Limiter — защита от межсэмпловых пиков
     # Используем 4x oversampling через scipy для точного ограничения
-    from scipy.signal import resample_poly
     LIMIT = 0.97   # −0.27 dBFS headroom
     if peak_out > LIMIT:
         audio = audio * (LIMIT / (peak_out + 1e-9))
@@ -972,9 +974,9 @@ def main():
              skip_noise=args.no_noise,
              skip_stretch=args.no_stretch)
     
-    print(f"\n{'═'*55}")
-    print(f"  ГОТОВО. Попробуй разные --seed для вариантов.")
-    print(f"{'═'*55}\n")
+    print("\n" + "═" * 55)
+    print("  ГОТОВО. Попробуй разные --seed для вариантов.")
+    print("═" * 55 + "\n")
 
 
 if __name__ == "__main__":

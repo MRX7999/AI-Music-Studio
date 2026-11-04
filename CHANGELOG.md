@@ -1,5 +1,22 @@
 # Changelog · Изменения
 
+## 1.3.0 — 2026-11-04
+
+Your humanize module (humanize.py, in the repo since 1.0.0) is now a step in the release pipeline.
+
+### Added
+- Release → Humanize, between Lyrics and the AI check: the 12 production steps of your module (pitch micro-warp, timing jitter, tape saturation, air exciter, organic noise, stereo micro-drift, transient smear, EQ micro-randomize, time-stretch, micro-phase dither, sub-sample timing scatter, micro room reverb).
+- Presets ultra-low (default), low, medium, high — exactly as in the module; Seed for repeatability; "Without organic noise" switch. The preset and the "Use in this studio session" switch are remembered.
+- The step writes `master_humanized.wav` and it becomes the master for the package and the AI check. `Restore the pre-humanize master` undoes it.
+- The module moved to `studio/humanize.py` so the app bundle ships it; `full_pipeline.py` imports it from there (with a fallback for the old location). Requires librosa (`pip install librosa`, added to requirements).
+
+### Notes
+- ultra-low keeps the spectrum and timing intact and only changes the signature; medium and high are clearly audible. The step runs once before the AI check; the check itself never changes audio, and the AI disclosure in the publish step stays as it is.
+
+### Добавлено
+- «Релиз» → «Гуманизация», между текстом и проверкой на ИИ: 12 шагов обработки из твоего модуля. Пресеты ultra-low (по умолчанию) … high, Seed, переключатель «Без живого шума».
+- Шаг пишет `master_humanized.wav`, и он становится мастером для пакета и проверки. Кнопка «Вернуть мастер до гуманизации» отменяет шаг. Нужна библиотека librosa (добавлена в requirements).
+
 ## 1.2.3 — 2026-11-04
 
 ### Fixed

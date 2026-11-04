@@ -3,7 +3,7 @@ import AppKit
 
 /// Release pipeline steps in the order the Release page runs them.
 enum ReleaseStep: String, CaseIterable, Identifiable {
-    case superres, refmaster, cover, lyrics, detect, package
+    case superres, refmaster, cover, lyrics, humanize, detect, package
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ enum ReleaseStep: String, CaseIterable, Identifiable {
         case .refmaster: return T("Reference", "Референс")
         case .cover: return T("Cover", "Обложка")
         case .lyrics: return T("Synced lyrics", "Текст и LRC")
+        case .humanize: return T("Humanize", "Гуманизация")
         case .detect: return T("AI check", "Проверка на ИИ")
         case .package: return T("Package", "Пакет")
         }
@@ -21,6 +22,7 @@ enum ReleaseStep: String, CaseIterable, Identifiable {
         case .refmaster: return "dial.medium"
         case .cover: return "photo"
         case .lyrics: return "text.quote"
+        case .humanize: return "person.wave.2"
         case .detect: return "checkmark.shield"
         case .package: return "shippingbox"
         }
@@ -54,6 +56,21 @@ struct CoverOptions: Equatable {
     var extra = ""
     var seed = ""
     var backend = ""
+}
+
+/// The humanization pass (the user's own humanize module): 12 subtle production steps.
+struct HumanizeOptions: Equatable {
+    private static func flag(_ key: String, _ def: Bool) -> Bool {
+        UserDefaults.standard.object(forKey: key) as? Bool ?? def
+    }
+    var preset = UserDefaults.standard.string(forKey: "humanize.preset") ?? "ultra-low" {
+        didSet { UserDefaults.standard.set(preset, forKey: "humanize.preset") }
+    }
+    var enabled = HumanizeOptions.flag("humanize.enabled", false) {
+        didSet { UserDefaults.standard.set(enabled, forKey: "humanize.enabled") }
+    }
+    var seed = ""                                  // empty → engine default (42)
+    var skipNoise = false
 }
 
 struct DetectOptions: Equatable {
@@ -157,6 +174,7 @@ final class ReleaseStore: ObservableObject {
     @Published var refOpts = RefMasterOptions()
     @Published var coverOpts = CoverOptions()
     @Published var detectOpts = DetectOptions()
+    @Published var humOpts = HumanizeOptions()
     @Published var pub = PublishOptions()
     @Published var pkg = PackageOptions()
     @Published var lrcText = ""
@@ -379,6 +397,9 @@ final class ReleaseStore: ObservableObject {
                     "backend": .s(coverOpts.backend)]
         case .lyrics:
             return ["language": .s(lrcLanguage)]
+        case .humanize:
+            return ["preset": .s(humOpts.preset), "seed": .s(humOpts.seed), "skip_noise": .b(humOpts.skipNoise),
+                    "enabled": .b(humOpts.enabled)]
         case .detect:
             return ["detectors": .array(detectOpts.list.map { .s($0) }), "threshold": .n(detectOpts.threshold)]
         case .package:
@@ -420,6 +441,7 @@ final class ReleaseStore: ObservableObject {
         for s in ReleaseStep.allCases {
             if s == .lyrics && (current?.str("lyrics_text").isEmpty ?? true) && lrcText.isEmpty { continue }
             if s == .refmaster && refOpts.reference.isEmpty { continue }
+            if s == .humanize && !humOpts.enabled { continue }
             await run(s)
             if message == T("Cancelled", "Отменено") { return }
         }
